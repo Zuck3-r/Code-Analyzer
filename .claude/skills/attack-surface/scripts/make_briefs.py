@@ -15,6 +15,7 @@ references/briefs.md のひな形に、ユニット ID・RUN・観点（referenc
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -27,6 +28,18 @@ REF = Path(__file__).parent.parent / "references"
 SMALL = ["entry+implicit+client+infra+nonhttp+leftover+authz", "intake+parsers", "assumptions+open"]
 MEDIUM = ["entry+authz", "implicit+leftover", "client+infra+nonhttp", "intake", "parsers", "assumptions+open"]
 LARGE = ["entry", "implicit", "client", "infra", "nonhttp", "leftover", "authz", "intake", "parsers", "assumptions", "open"]
+# 役割ごとのモデル（SKILL.md の「役割ごとのモデル」と同じ内容）。
+#   推論の比重が大きい観点（認証の境界、受け口、解釈点、前提を破る、自由枠）は最上位のモデル。
+#   全文を読んで写す読み手と、定義や設定を辿る観点は、その 1 つ下。これより下のモデルは使わない。
+REASONING_LENSES = {"authz", "intake", "parsers", "assumptions", "open"}
+MODEL_TOP, MODEL_READ = "fable", "opus"
+
+
+def model_for(lenses: list[str] | None) -> str:
+    """lenses が None ならパス 1 の読み手。"""
+    return MODEL_TOP if lenses and any(x in REASONING_LENSES for x in lenses) else MODEL_READ
+
+
 OPEN_TEXT = ("常識的な一覧には載らなさそうな入口を中心に、このシステムに外部から入力を届ける方法を自由に探してください。\n"
              "観点は指定しません。このコードを書いた人が「ここは外からは来ない」と思い込んでいそうな箇所を疑ってください。")
 
@@ -93,6 +106,7 @@ def main() -> int:
         return t.replace("<RUN>", run_s).replace("<SK>", sk).replace("<INPUT_ROOT>", str(inventory.get("input_root", "")))
 
     written: list[str] = []
+    models: dict[str, str] = {}
     if not args.pass1_self:
         p1 = template(briefs, "## パス 1")
         p1 = re.sub(r"(?m)^<orientation\.md の要点[^\n]*>$", lambda _m: background, p1)
@@ -100,6 +114,7 @@ def main() -> int:
             path = out / f"pass1-{u['id']}.md"
             path.write_text(fill(p1.replace("<UNIT_ID>", u["id"])) + "\n", encoding="utf-8")
             written.append(path.name)
+            models[path.name] = model_for(None)
 
     total = sum(u.get("est_tokens", 0) for u in units)
     groups = [g.strip() for g in args.groups.split(",") if g.strip()] or (SMALL if total < 60_000 else MEDIUM if total < 600_000 else LARGE)
@@ -125,11 +140,14 @@ def main() -> int:
         path = out / f"pass2-{name}.md"
         path.write_text(fill(text.replace("<LENS_ID>", name)) + "\n", encoding="utf-8")
         written.append(path.name)
+        models[path.name] = model_for(lenses)
 
     missing = [x for x in sections if x not in used]
     print(f"briefs={len(written)} dir={out.as_posix()} pass2_groups={len(groups)}")
     for w in written:
-        print(f"  {w}")
+        print(f"  {w}\tmodel={models[w]}")
+    (out / "models.json").write_text(json.dumps(models, ensure_ascii=False, indent=1), encoding="utf-8")
+    print("各依頼は、上の model で起動する（サブエージェントの起動時にモデルを指定する。指定できない環境では、取りまとめ役と同じモデルで動く）。")
     if missing:
         print(f"WARNING: どの組にも入っていない観点: {' '.join(missing)}")
     print("依頼の言い方: 「<上のファイルのパス> を読み、書かれているとおりに調査を進めてください。」（依頼文の中身を書き写さない）")
