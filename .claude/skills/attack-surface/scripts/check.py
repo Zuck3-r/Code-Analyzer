@@ -455,7 +455,7 @@ def silent_files(inventory: dict, rows: list[dict], cov_by_file: dict[str, dict]
     entry_like, parser_like, parser_lines = [], [], []
     base = inventory["base_dir"]
     for f in inventory["files"]:
-        if not f.get("text") or f["tier"] == "C" or f["ext"] in NOISY_EXT or f["size"] > 800_000:
+        if not f.get("text") or f["tier"] in ("C", "D") or f["ext"] in NOISY_EXT or f["size"] > 800_000:
             continue
         try:
             lines = read_text(resolve(base, f["path"])).splitlines()
@@ -583,6 +583,10 @@ def main() -> int:
         for f in inventory["files"]:
             c = cov_by_file.get(f["path"])
             status = c.get("status") if c else None
+            if f["tier"] == "D" and status not in rank:
+                per_source[f["source"]]["開かない区分"] += 1
+                per_source[f["source"]]["計"] += 1
+                continue
             per_source[f["source"]][status or "未記録"] += 1
             per_source[f["source"]]["計"] += 1
             if status not in rank:
@@ -594,9 +598,9 @@ def main() -> int:
         summary["files"] = len(inventory["files"])
         summary["unrecorded"] = len(unrecorded)
         summary["unrecorded_ab"] = sum(1 for f in unrecorded if f["tier"] in ("A", "B"))
-        md += ["## 2. 読了状況", "", "| ソース | 計 | 全読 | 流し読み | 読まず | 未記録 |", "|---|---:|---:|---:|---:|---:|"]
+        md += ["## 2. 読了状況", "", "| ソース | 計 | 全読 | 流し読み | 読まず | 開かない区分 (D) | 未記録 |", "|---|---:|---:|---:|---:|---:|---:|"]
         for s, c in per_source.items():
-            md.append(f"| {s} | {c['計']} | {c['read']} | {c['skimmed']} | {c['skipped']} | {c['未記録']} |")
+            md.append(f"| {s} | {c['計']} | {c['read']} | {c['skimmed']} | {c['skipped']} | {c['開かない区分']} | {c['未記録']} |")
         md.append("")
         if unrecorded:
             unrecorded.sort(key=lambda f: (f["tier"], f["path"]))

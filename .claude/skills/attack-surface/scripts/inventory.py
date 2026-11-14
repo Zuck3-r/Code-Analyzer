@@ -24,6 +24,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import utf8_stdout  # noqa: E402
 import kb  # noqa: E402
+import scope  # noqa: E402
 
 # 個々のファイルを一覧に出さず、まとめて数えるだけにするディレクトリ（依存物・VCS・キャッシュ）
 PRUNE = {
@@ -240,6 +241,8 @@ def walk_source(name: str, root: Path, base: Path) -> tuple[list[dict], dict]:
 
 def cost(f: dict) -> tuple[float, float]:
     """(読む量の目安バイト, ファイル数の目安)。ティア C は流し読みなので軽く数える。"""
+    if f["tier"] == "D":
+        return 0, 0
     if f["tier"] == "C" or not f["text"]:
         return min(f["size"], 1500), 0.15
     return f["size"], 1.0
@@ -347,7 +350,10 @@ def validate_units(units: list[dict], files_by_path: dict[str, dict]) -> list[st
             seen[p] = u.get("id", "?")
             if p not in files_by_path:
                 problems.append(f"{p}（{u.get('id')}）は棚卸しに無いパスです")
-    missing = [p for p in files_by_path if p not in seen]
+    for p, uid in seen.items():
+        if files_by_path.get(p, {}).get("tier") == "D":
+            problems.append(f"{p}（{uid}）は読まない区分 (D) です。読むなら scope.jsonl でティアを上げる")
+    missing = [p for p, f in files_by_path.items() if p not in seen and f.get("tier") != "D"]
     if missing:
         problems.append(f"どのユニットにも入っていないファイルが {len(missing)} 件あります（例: {', '.join(missing[:5])}）")
     return problems
@@ -371,7 +377,8 @@ def write_summary(work: Path, inv: dict, units: list[dict]) -> None:
     out = ["# 入力の棚卸し", "", f"- 入力: `{inv['input_root']}`", f"- 作成: {inv['created']}",
            f"- ファイル: {len(files)} 件 / {human(sum(f['size'] for f in files))}",
            f"- ティア: A {sum(1 for f in files if f['tier'] == 'A')} / B {sum(1 for f in files if f['tier'] == 'B')} / C {sum(1 for f in files if f['tier'] == 'C')}"
-           "（A: 入口に直結しそう、B: 通常のコード、C: 生成物・依存物・バイナリなど流し読みでよさそうなもの。目安であり、読んで違えば変える）",
+           f" / D {sum(1 for f in files if f['tier'] == 'D')}"
+           "（A: 入口に直結しそう、B: 通常のコード、C: 流し読み、D: 開かない。区分の内訳と確かめ方は `scope.md`。目安であり、読んで違えば変える）",
            f"- 読む量の見込み: 約 {sum(u['est_tokens'] for u in units):,} トークン / {len(units)} ユニット", ""]
     out += ["## ソース", "", "| ソース | ファイル | サイズ | 主な言語 | .git | 依存マニフェスト・構成ファイル |", "|---|---:|---:|---|---|---|"]
     for s in inv["sources"]:
@@ -404,7 +411,26 @@ def refresh(run: Path) -> int:
     inv = json.loads((work / "inventory.json").read_text(encoding="utf-8"))
     data = json.loads((work / "units.json").read_text(encoding="utf-8"))
     units = data["units"] if isinstance(data, dict) else data
+    result = scope.triage(inv, scope.load_overrides(work))
+    scope.write_scope(work, inv, result)
+    (work / "inventory.json").write_text(json.dumps(inv, ensure_ascii=False, indent=1), encoding="utf-8")
     files_by_path = {f["path"]: f for f in inv["files"]}
+    # 読まない区分に移ったファイルをユニットから外し、読む側に戻ったファイルを新しいユニットに入れる
+    for u in units:
+        u["files"] = [p for p in u.get("files", []) if files_by_path.get(p, {}).get("tier") != "D"]
+    units = [u for u in units if u["files"]]
+    assigned = {p for u in units for p in u["files"]}
+    back = [f for f in inv["files"] if f["tier"] != "D" and f["path"] not in assigned]
+    if back:
+        extra = make_units(back, 180, 60)
+        used = {u.get("id") for u in units}
+        n = len(units)
+        for u in extra:
+            n += 1
+            while f"u{n:03d}" in used:
+                n += 1
+            u["id"] = f"u{n:03d}"
+        units += extra
     for i, u in enumerate(units, 1):
         u.setdefault("id", f"u{i:03d}")
         u.setdefault("source", files_by_path.get((u.get("files") or [""])[0], {}).get("source", ""))
@@ -496,21 +522,24 @@ def main() -> int:
     for m in metas:
         if m["has_git"]:
             notes.append(f"`{m['name']}` には .git がある。履歴や別ブランチにだけ残る入口を調べる余地がある（読み取りのみ）")
-    big = [f for f in files if f["tier"] != "C" and f["size"] > 400_000]
+    big = [f for f in files if f["tier"] not in ("C", "D") and f["size"] > 400_000 and not scope._propose(f["path"].lower(), f, set())]
     for f in big[:20]:
         notes.append(f"`{f['path']}` は大きい（{human(f['size'])}）。読み手を単独で割り当てるか、分けて読む")
 
-    files_by_path = {f["path"]: f for f in files}
-    units = make_units(files, args.unit_kb, args.unit_files)
-    describe_units(units, files_by_path)
     inv = {
         "run": run_name, "created": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "base_dir": str(base.resolve()),
         "input_root": rel_to(base, input_root), "sources": metas, "files": files, "notes": notes,
     }
+    # 読む範囲を決める（翻訳・テスト用データなどは開かない区分へ。落とした全ファイルを走査して、目印があれば戻す）
+    result = scope.triage(inv)
+    files_by_path = {f["path"]: f for f in files}
+    units = make_units([f for f in files if f["tier"] != "D"], args.unit_kb, args.unit_files)
+    describe_units(units, files_by_path)
     (work / "inventory.json").write_text(json.dumps(inv, ensure_ascii=False, indent=1), encoding="utf-8")
     (work / "units.json").write_text(json.dumps({"units": units}, ensure_ascii=False, indent=1), encoding="utf-8")
     write_unit_lists(work, units, files_by_path)
     write_summary(work, inv, units)
+    scope.write_scope(work, inv, result)
     for sub in ("pass1", "pass2", "check"):
         (work / sub).mkdir(exist_ok=True)
 
@@ -519,6 +548,8 @@ def main() -> int:
     kb.write_knowledge(run, inv, found)
     print(f"sources={len(metas)} files={len(files)} units={len(units)} est_tokens={sum(u['est_tokens'] for u in units)}")
     print(f"summary={rel_to(base, work / 'inventory.md')}")
+    tc = {t: sum(1 for f in files if f["tier"] == t) for t in "ABCD"}
+    print(f"scope={rel_to(base, work / 'scope.md')} A={tc['A']} B={tc['B']} C={tc['C']} D={tc['D']} promoted_back={len(result['promoted'])}")
     print(f"knowledge={rel_to(base, work / 'knowledge.md')} implicit={sum(len(v) for v in found['implicit'].values())} components={sum(len(v) for v in found['components'].values())}")
     print(f"RUN={rel_to(base, run)}")
     return 0
