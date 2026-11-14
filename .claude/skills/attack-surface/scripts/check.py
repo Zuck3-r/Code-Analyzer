@@ -439,6 +439,15 @@ def find_quote(lines: list[str], quote: str) -> list[int]:
     return hits
 
 
+_SQL_WORDS = re.compile(r"(?i)\b(select|insert\s+into|update|delete\s+from|from|where|join|order\s+by|group\s+by|create\s+table|alter\s+table|drop\s+table|values)\b")
+_EXEC_WORDS = re.compile(r"(?i)\b(system|popen|exec\w*|spawn\w*|subprocess|child_process|Open3|ProcessBuilder|shell)\b")
+# 入口らしさの判定から外す、開発補助の設定（リンター・エディター・CI のひな形・課題のひな形）。URL が並ぶだけで入口は定義しない
+_DEV_CONFIG = re.compile(
+    r"(?i)(^|/)(\.rubocop[^/]*|\.eslintrc[^/]*|eslint\.config\.[cm]?js|\.prettierrc[^/]*|\.stylelintrc[^/]*|\.editorconfig|\.gitattributes|\.gitignore|\.dockerignore|"
+    r"\.pre-commit-config\.ya?ml|renovate\.json5?|dependabot\.ya?ml|codecov\.ya?ml|\.codeclimate\.ya?ml|funding\.ya?ml|codeowners)$|"
+    r"(^|/)\.github/(issue_template|pull_request_template|discussion_template)|(^|/)new_framework_defaults[^/]*\.rb$")
+
+
 def silent_files(inventory: dict, rows: list[dict], cov_by_file: dict[str, dict], top: int) -> tuple[list[dict], list[dict], list[dict]]:
     """(入口らしい記述があるのに検出ゼロのファイル, 解釈処理らしい記述があるのに検出ゼロのファイル,
         検出のあるファイルの中で、解釈処理らしい行の近くに受け口・解釈点の根拠が無いもの)"""
@@ -481,6 +490,9 @@ def silent_files(inventory: dict, rows: list[dict], cov_by_file: dict[str, dict]
                 continue  # コメント行は解釈処理の目印にしない
             for name, rx in PARSER_HINTS:
                 if rx.search(line):
+                    # SQL の識別子を囲むバッククォート（`table`.`col` や #{…} を含む SQL 文）は、外部コマンドではない
+                    if name == "外部コマンド" and "`" in line and _SQL_WORDS.search(line) and not _EXEC_WORDS.search(line):
+                        continue
                     pkinds[name] += 1
                     if len(pwhere) < 8:
                         pwhere.append(n)
@@ -494,7 +506,8 @@ def silent_files(inventory: dict, rows: list[dict], cov_by_file: dict[str, dict]
         strong = (kinds["ルート定義らしい行"] + kinds["ルーティング用の注釈"] + kinds["インフラ上の露出"] + kinds["非 HTTP の入口"]
                   + kinds["GraphQL・RPC・WebSocket の定義"] + kinds["ファイル規約のハンドラ"])
         score = strong * 3 + kinds["外部への呼び出し"] * 2 + kinds["URL リテラル"]
-        if score >= 3:
+        # URL が並ぶだけ（外部への呼び出しも定義らしい行も無い）のファイルと、開発補助の設定は挙げない
+        if score >= 3 and (strong or kinds["外部への呼び出し"]) and not _DEV_CONFIG.search(f["path"]):
             entry_like.append({"file": f["path"], "score": score, "kinds": dict(kinds), "lines": where, "judged": judged})
         if pkinds:
             parser_like.append({"file": f["path"], "score": sum(pkinds.values()), "kinds": dict(pkinds), "lines": pwhere, "judged": judged, "test": is_test})
@@ -802,12 +815,28 @@ def main() -> int:
         # パス 1 は暗黙の口を挙げない決まりなので、origin が implicit の新規は取りこぼしではない
         new_implicit = [(r, near) for r, near in new if str(r.get("origin", "")).lower() == "implicit"]
         new_defined = [(r, near) for r, near in new if str(r.get("origin", "")).lower() != "implicit"]
-        new_entry = [(r, near) for r, near in new_defined if layer_of(r) == "入口"]
+        # 根拠がパス 1 の項目と同じ箇所を指す新規は、同じ対象の書き方違いである見込みが高い（統合の寄せ直しで解消する）
+        p1_spots: dict[tuple, list[tuple[int, str]]] = defaultdict(list)
+        for it in idx1.items:
+            for e in it.get("evidence", []):
+                if e.get("file") and isinstance(e.get("line"), int):
+                    p1_spots[(str(it.get("source", "")).lower(), norm_file(e["file"]))].append((e["line"], squash(e.get("quote", ""))))
+
+        def respelled(r: dict) -> bool:
+            file, line, quote = first_evidence(r)
+            return bool(file) and any(same_spot(line, quote, l2, q2) for l2, q2 in p1_spots.get((str(r.get("source", "")).lower(), file), []))
+
+        new_entry_all = [(r, near) for r, near in new_defined if layer_of(r) == "入口"]
+        respelled_entries = [(r, near) for r, near in new_entry_all if respelled(r)]
+        new_entry = [(r, near) for r, near in new_entry_all if not respelled(r)]
+        respelled_ids = {id(r) for r, _ in respelled_entries}
         summary["pass1"] = len(idx1.items)
         summary["new_in_later_passes"] = len(new)
         summary["new_defined_entries"] = len(new_entry)
         md += ["## 8. パス間の突き合わせ", "", f"- パス 1: {len(idx1.items)} 件（重複を除く）",
-               f"- パス 2 以降だけが見つけたもの: **{len(new)} 件**（暗黙の仕組み {len(new_implicit)} / コードや設定に定義のあるもの {len(new_defined)}、うち入口 **{len(new_entry)}**）",
+               f"- パス 2 以降だけが見つけたもの: **{len(new)} 件**（暗黙の仕組み {len(new_implicit)} / コードや設定に定義のあるもの {len(new_defined)}）",
+               f"- 定義のある入口の新規 {len(new_entry_all)} 件の内訳: 根拠の場所も新しいもの（パス 1 の取りこぼし）うち入口 **{len(new_entry)}** / "
+               f"根拠がパス 1 の項目と同じ箇所のもの {len(respelled_entries)}（同じ対象の書き方違いの見込み。`aliases.jsonl` で寄せる）",
                f"- パス 1 だけが見つけたもの: {len(only1)} 件（そのまま残す）",
                f"- 適用した補助ファイル: aliases {len(aliases)} 行 / prefixes {len(prefixes)} 行", "",
                "同じ対象かどうかは、URL で表せる入口はメソッドとパスで、それ以外は識別子または根拠の位置で判定している。"
@@ -825,13 +854,15 @@ def main() -> int:
                 for r, near in group[:300]:
                     is_anchor = str(r.get("kind", "")).lower() in ANCHOR_KINDS
                     note = ("同じファイルにパス 1 の項目あり（別の箇所）" if is_anchor else "同じパスでメソッド違いがパス 1 にある") if near else ""
+                    if id(r) in respelled_ids:
+                        note = "**書き方違いの見込み**（根拠がパス 1 の項目と同じ箇所）" + (" / " + note if note else "")
                     md.append(f"| {r.get('found_by', '')} | {r.get('source', '')} | {r.get('kind', '')} | {r.get('method', '')} | `{r.get('path', '')}` | {note} |")
                 if len(group) > 300:
                     md.append(f"| … | | | | ほか {len(group) - 300} 件 | |")
                 md.append("")
         n1_entry = sum(1 for r in idx1.items if layer_of(r) == "入口")
         ratio = len(new_entry) / max(1, n1_entry)
-        md += [f"収束の目安: 定義のある入口の新規は、パス 1 の入口 {n1_entry} 件に対して {ratio:.0%}。5% を下回れば収束、特定のソース・種別に 5 件以上固まっていればその範囲をもう一度掘る。",
+        md += [f"収束の目安: 根拠の場所も新しい入口の新規は、パス 1 の入口 {n1_entry} 件に対して {ratio:.0%}（書き方違いの見込みのものは数えていない）。5% を下回れば収束、特定のソース・種別に 5 件以上固まっていればその範囲をもう一度掘る。",
                "受け口・解釈点と暗黙の仕組みはパス 2 の専用レンズが主に拾うので、初回はここに多く出るのが普通（収束の判断には使わない）。", ""]
 
     # ---- 9. 3 層のつながり
