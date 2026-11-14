@@ -145,6 +145,7 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 | このコードが呼び出す外部の宛先 | `other` | 空 | `outbound:宛先の役割`（宛先が入力で決まるものは、解釈点 `url:` にも書く） | `outbound:webhook-delivery`、`outbound:dns-resolver` |
 | 外部から届くデータの取り込み（受信メール、外部 API の応答、ファイルの監視） | `event` | 空 | `inbound:種類` | `inbound:bounce-mail`、`inbound:dns-response` |
 | 設定の読み込み口（外から変えられる設定） | `other` | 空 | `config:読み込み元` | `config:env+postal.yml` |
+| 1 つのパスで、クエリや本文の値によって操作が変わる API（Fever、JSON-RPC、`?action=` 型） | URL の入口 1 件（`http`）＋ 操作ごとに `rpc` | 入口は実際のメソッド。操作は空 | 入口はパス。操作は `名前:操作`。根拠の 1 件目は、その操作に振り分けている行 | `ANY /fever/` と `fever:groups`、`fever:mark` |
 | 受け口 | `input-channel` | 空 | `種類:仕組み` | `body:json+urlencoded(extended)`、`header:X-Forwarded-*`、`cookie:session(marshal)`、`rsc:server-functions` |
 | 解釈点 | `parser` | 空 | `種類:部品@場所` | `xml:xml2js@routes/import.js`、`deserialize:yaml.load@tasks.py` |
 
@@ -153,6 +154,11 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
   1 つの定義が複数のホストで公開されているだけなら 1 件でよい（`host` は空のままか代表の 1 つ。ほかのホストは `notes` に）
 - **同じソースの中に HTTP サーバーが複数ある**とき（本体のほかにヘルスチェック用・管理用のサーバーがある、ヘッダーで動作が切り替わる別モードがある）は、
   本体以外の項目の `host` に `役割名:ポート` を書いて分ける（`health:9090`、`tracking:5000`）。書かないと、`/` や `/{path*}` が本体の同じパスと 1 件に統合される
+- **ルーターの登録の読み方は、そのルーターの規則に従う。** メソッドを書かない登録は `ANY`。配下すべてを受ける登録（Go の ServeMux の末尾 `/`、Express の `app.use('/x')`、`/*`）は `/x/{path*}` と書く
+  （`/x/` と `/x/{path*}` を人によって書き分けない）。完全一致の指定（ServeMux の `{$}`）は末尾なしのパスで書く
+- **外向きの宛先（`outbound:`）** の名前は、連携先や役割の名前 1 語（`outbound:apprise`、`outbound:webhook-delivery`）。根拠の 1 件目は、**実際に送信する行**（HTTP クライアントの呼び出し）。
+  呼び出し元（振り分けの行）は 2 件目以降に書く
+- **解釈点の根拠の 1 件目**は、解釈を実行する呼び出しの行（`Decode` `Unmarshal` `Parse` `Execute` `extractAll` の行）。デコーダーやパーサーを生成・設定している行ではない
 - タグは下の語彙にあるものを優先する（似た意味の新語を作ると集計が割れる）
 - 解釈点の `fed_by` は、**届く入口の `method` と `path` を、その入口の項目と同じ書き方で**書く（`POST /api/v1/send/message`、`smtp:DATA`、`thumbnails`）。
   説明を足さない（「〜のルート（担当外）」のように書くと結べない）。同じ書き方なら統合時に入口へ自動で結ばれ、入口の `reaches` も埋まる。
@@ -203,7 +209,8 @@ URL・ポート・イベント名を持つものはまず「入口」に書き�
 - `match` … 書いた条件を**すべて**満たす項目が対象。値をリストにすると「いずれか」。`{}` は全項目。使える条件:
   `source` `kind` `method` `layer`（`入口` / `受け口` / `解釈点`）`flag` `tag` `path` `path_regex` `key` `found_by`（部分一致）`host` `origin` `auth` `confidence` `priority` `reach` `file`（根拠のパスの部分一致）。
   `path` と `path_regex` は、公開パスと `internal_path` のどちらかに当たればよい
-- 操作 … `set`（フィールドの上書き。空文字の値は無視される）`add_flags` `remove_flags` `add_tags` `append_notes`
+- 操作 … `set`（フィールドの上書き。空文字の値は無視される）`add_flags` `remove_flags` `add_tags` `append_notes` `replace_fed_by`（`{"古い書き方": "新しい書き方"}`。`fed_by` の該当する要素だけを置き換える）
+- `path_regex` に `{` や `\` を含む条件は、JSON の中で `\\{` のように二重に書く。手で書くと壊しやすいので、`key` で指すか、短いスクリプトで書き出す
 - `key` は統合後の各項目に振られる短い鍵（`merged.findings.jsonl` の `key`）。識別子（受け口・解釈点は根拠の位置）が変わると鍵も変わるので、
   `aliases.jsonl` を直した後は `merge.md` の「当たらなかった行」を確かめる
 - どの項目にも当たらなかった行と、知らない条件を書いた行は `merge.md` に出る

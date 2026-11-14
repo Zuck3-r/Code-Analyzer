@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -154,7 +155,11 @@ def _put(obj: dict, name: str, value) -> None:
 
 def request_template(it: dict) -> str:
     """入口 1 件ぶんの、送信の出発点になるリクエスト（REST Client 形式）。値は仮で、コードから読めた項目名と場所だけを反映する。"""
-    ps = [p for p in it["params"] if isinstance(p, dict) and p.get("name")]
+    ps_all = [p for p in it["params"] if isinstance(p, dict) and p.get("name")]
+    # 名前が説明文になっているもの（「設定で指定された名前のヘッダ」など）は、リクエストの行にせずコメントにする
+    plain = lambda p: bool(re.fullmatch(r"[A-Za-z0-9_.\-\[\]*]+", str(p["name"])))  # noqa: E731
+    ps = [p for p in ps_all if plain(p)]
+    described = [p for p in ps_all if not plain(p)]
     by = lambda where: [p for p in ps if p.get("in") == where]  # noqa: E731
     method = str(it.get("method", "") or "GET").upper()
     method = "GET" if method in ("ANY", "") else method
@@ -162,7 +167,7 @@ def request_template(it: dict) -> str:
     q = [p for p in by("query") if p["name"] != "*"]
     if q:
         url += "?" + "&".join(f"{p['name']}={{{{{p['name']}}}}}" for p in q)
-    lines = [f"{method} {url}"]
+    lines = [f"# {p.get('in', '')}: {squash(p['name'])[:120]}" for p in described] + [f"{method} {url}"]
     lines += [f"{p['name']}: {{{{{p['name']}}}}}" for p in by("header")]
     if by("cookie"):
         lines.append("Cookie: " + "; ".join(f"{p['name']}={{{{{p['name']}}}}}" for p in by("cookie")))

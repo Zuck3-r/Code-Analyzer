@@ -333,6 +333,11 @@ class Index:
             return None
         mine_ev = first_evidence(f)
         for it in self.by_key.get(finding_key(f), []):
+            its_ev = first_evidence(it)
+            same_place = bool(mine_ev[0]) and mine_ev[0] == its_ev[0] and same_spot(mine_ev[1], mine_ev[2], its_ev[1], its_ev[2])
+            # 中継（プロキシの設定）と、アプリ自身の入口は、同じパスでも別の対象。根拠が同じ箇所のときだけ同じとみなす
+            if (kind_of(f) == "proxy") != (kind_of(it) == "proxy") and not same_place:
+                continue
             if hosts_compatible(f, it):
                 return it
             # ホストの書き方だけが違う同じ定義（根拠が同じ箇所を指す）。別の箇所で定義された同じパスは別の対象
@@ -645,7 +650,7 @@ def apply_prefixes(rows: list[dict], prefixes: list[dict]) -> Counter:
 # ---------------------------------------------------------------- 秘密情報の検知とマスク
 
 _SECRET_PATTERNS = [
-    (re.compile(r"(://)([^/\s:@]+):([^@\s/*]{3,})@"), r"\1\2:***@"),
+    (re.compile(r"(://)([^/\s:@]+):(?!\$|\{|<|%|(?:password|passwd|pass|secret|token|changeme|x{3,}|\.{3})@)([^@\s/*]{3,})@(?!example\.)"), r"\1\2:***@"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA***"),
     (re.compile(r"\beyJ[A-Za-z0-9_\-]{15,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}"), "eyJ***"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)"), "-----BEGIN PRIVATE KEY----- ***"),

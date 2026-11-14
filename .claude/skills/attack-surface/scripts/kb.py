@@ -67,7 +67,7 @@ def dep_patterns(eco: str, name: str) -> list[re.Pattern]:
     elif eco == "nuget":
         pats = [rf'(?i)(?:Include|Update)\s*=\s*"{n}"(?:\s+Version\s*=\s*"([^"]+)")?', rf'(?i)<package\s+id\s*=\s*"{n}"(?:\s+version\s*=\s*"([^"]+)")?', rf'(?i)Sdk\s*=\s*"{n}"']
     elif eco == "go":
-        pats = [rf'(?m)^\s*(?:require\s+)?{n}(?:/[\w.\-/]+)?\s+(v[\w.\-+]+)']
+        pats = [rf'(?m)^\s*(?:require\s+)?{n}(?:/[\w.\-/]+)?\s+(v[\w.\-+]+)(?![^\n]*//\s*indirect)']
     elif eco == "cargo":
         pats = [rf'(?m)^\s*{n}\s*=\s*[^\n]*?"(\d[^"]*)"', rf'(?m)^\s*{n}\s*=', rf'(?m)^\s*\[(?:dev-|build-)?dependencies\.{n}\]']
     elif eco == "hex":

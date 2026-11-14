@@ -23,6 +23,8 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import utf8_stdout  # noqa: E402
+from collections import Counter  # noqa: E402
+
 import kb  # noqa: E402
 import scope  # noqa: E402
 
@@ -319,6 +321,13 @@ def describe_units(units: list[dict], files_by_path: dict[str, dict]) -> None:
         u["n_files"] = len(u["files"])
         u["tiers"] = {t: sum(1 for x in fl if x["tier"] == t) for t in "ABC"}
         u["est_tokens"] = int(sum(cost(x)[0] for x in fl) / 3.2)
+    # 範囲の名前が同じユニットが複数あるときは、最初と最後のファイルを添えて見分けられるようにする
+    seen = Counter(u.get("label", "") for u in units)
+    for u in units:
+        if seen[u.get("label", "")] > 1 and u["files"]:
+            cut = len(u["label"]) + 1 if u["label"] else 0
+            first, last = u["files"][0][cut:], u["files"][-1][cut:]
+            u["label"] = f"{u['label']}（{first} 〜 {last}）" if first != last else f"{u['label']}（{first}）"
 
 
 def write_unit_lists(work: Path, units: list[dict], files_by_path: dict[str, dict]) -> None:
