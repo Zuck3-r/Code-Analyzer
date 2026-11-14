@@ -36,7 +36,7 @@ PRUNE = {
     ".yarn": "依存物キャッシュ", ".pnpm-store": "依存物キャッシュ", ".bundle": "依存物", ".cache": "キャッシュ",
 }
 VENDOR_MARKERS = ("composer.json", "go.mod", "Gemfile")
-BUILD_DIRS = {"dist", "build", "out", "target", "bin", "obj", ".next", ".nuxt", ".output", ".svelte-kit", "coverage", "storybook-static", ".vercel", ".netlify", "_site"}
+BUILD_DIRS = {"dist", "build", "out", "target", "obj", ".next", ".nuxt", ".output", ".svelte-kit", "coverage", "storybook-static", ".vercel", ".netlify", "_site"}
 BINARY_EXT = {
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff", ".psd", ".avif", ".heic",
     ".mp3", ".mp4", ".mov", ".avi", ".wav", ".ogg", ".webm", ".flac", ".mkv",
@@ -215,7 +215,8 @@ def walk_source(name: str, root: Path, base: Path) -> tuple[list[dict], dict]:
                             pass
             meta["pruned"].append({"dir": rel_to(base, d / sub), "why": why, "files": n, "bytes": b})
         dirnames[:] = keep
-        in_build = any(part in BUILD_DIRS for part in rel_dir.split("/")) if rel_dir else False
+        # bin/ は、Rails・Ruby・シェルでは実行スクリプトの置き場所（入口）。ビルド成果物として扱うのは .NET の bin/Debug・bin/Release だけ
+        in_build = bool(rel_dir) and (any(part in BUILD_DIRS for part in rel_dir.split("/")) or bool(re.search(r"(?i)(^|/)bin/(debug|release)(/|$)", rel_dir)))
         for fn in sorted(filenames):
             p = d / fn
             if p.is_symlink():
@@ -411,7 +412,8 @@ def refresh(run: Path) -> int:
     inv = json.loads((work / "inventory.json").read_text(encoding="utf-8"))
     data = json.loads((work / "units.json").read_text(encoding="utf-8"))
     units = data["units"] if isinstance(data, dict) else data
-    result = scope.triage(inv, scope.load_overrides(work))
+    overrides, scope_errors = scope.load_overrides(work)
+    result = scope.triage(inv, overrides)
     scope.write_scope(work, inv, result)
     (work / "inventory.json").write_text(json.dumps(inv, ensure_ascii=False, indent=1), encoding="utf-8")
     files_by_path = {f["path"]: f for f in inv["files"]}
@@ -421,6 +423,12 @@ def refresh(run: Path) -> int:
     units = [u for u in units if u["files"]]
     assigned = {p for u in units for p in u["files"]}
     back = [f for f in inv["files"] if f["tier"] != "D" and f["path"] not in assigned]
+    if back and len(back) <= 12 and units:
+        # 数ファイルのために読み手を 1 人増やさない: 同じソースの最後のユニットに足す
+        for f in back:
+            host = next((u for u in reversed(units) if f["source"] in str(u.get("source", ""))), units[-1])
+            host["files"].append(f["path"])
+        back = []
     if back:
         extra = make_units(back, 180, 60)
         used = {u.get("id") for u in units}
@@ -440,6 +448,9 @@ def refresh(run: Path) -> int:
     write_unit_lists(work, units, files_by_path)
     write_summary(work, inv, units)
     kb.write_knowledge(run, inv)
+    problems += [f"scope.jsonl: {e}（この行は効いていない。JSON の中の \\ は \\\\ と書く）" for e in scope_errors]
+    problems += [f"scope.jsonl {i + 1} 行目はどのファイルにも当たっていない: {json.dumps(ov, ensure_ascii=False)[:120]}"
+                 for i, ov in enumerate(overrides) if not result["override_hits"][i]]
     print(f"units={len(units)} problems={len(problems)}")
     for p in problems:
         print("PROBLEM:", p)

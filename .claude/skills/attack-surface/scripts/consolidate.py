@@ -99,6 +99,10 @@ def main() -> int:
         used[key] += 1
         it["key"] = key if used[key] == 1 else f"{key}-{used[key]}"
 
+    # 上書きを当てる前の姿を残す（overrides を作り直すときは、こちらを元にする）
+    (work / "merged.raw.findings.jsonl").write_text(
+        "\n".join(json.dumps({k: v for k, v in it.items() if not k.startswith("_")}, ensure_ascii=False) for it in items) + "\n", encoding="utf-8")
+
     # ---- 6. 上書きと追記
     override_hits: Counter = Counter()
     unknown_conds: list[str] = []
@@ -119,6 +123,42 @@ def main() -> int:
             it["tags"] = sorted(dict.fromkeys([*map(str, as_list(it.get("tags"))), *map(str, as_list(ov.get("add_tags")))]))
             if ov.get("append_notes") and str(ov["append_notes"]) not in str(it.get("notes", "")):
                 it["notes"] = (str(it.get("notes", "")) + " / " + str(ov["append_notes"])).strip(" /")
+
+    # ---- 解釈点の fed_by を入口に結び、入口の reaches を逆引きで埋める
+    entry_by_url: dict[tuple, dict] = {}
+    entry_by_name: dict[str, dict] = {}
+    for it in items:
+        if layer_of(it) != "入口":
+            continue
+        for p in (it.get("path"), it.get("internal_path")):
+            if not p:
+                continue
+            if is_url_item(it):
+                entry_by_url[(str(it.get("method", "") or "").upper(), norm_path(str(p)))] = it
+            entry_by_name[re.sub(r"\s+", " ", str(p)).strip().lower()] = it
+    fed_unmatched: Counter = Counter()
+    fed_linked = 0
+    for it in items:
+        if kind_of(it) != "parser":
+            continue
+        for fb in map(str, as_list(it.get("fed_by"))):
+            s = re.sub(r"\s+", " ", fb).strip()
+            if not s or s in ("不明", "unknown", "全ルート") or s.startswith("全"):
+                continue
+            m, _, p = s.partition(" ")
+            hit = entry_by_name.get(s.lower())
+            if hit is None and p.startswith("/"):
+                hit = entry_by_url.get((m.upper(), norm_path(p))) or entry_by_url.get(("ANY", norm_path(p)))
+            if hit is None and s.startswith("/"):
+                hit = next((v for (mm, pp), v in entry_by_url.items() if pp == norm_path(s)), None)
+            if hit is None and p:
+                hit = entry_by_name.get(p.lower())
+            if hit is None:
+                fed_unmatched[s] += 1
+                continue
+            fed_linked += 1
+            if str(it.get("path", "")) not in map(str, as_list(hit.get("reaches"))):
+                hit["reaches"] = [*as_list(hit.get("reaches")), it.get("path", "")]
 
     # ---- 7. 書き出し
     def clean(it: dict) -> dict:
@@ -243,6 +283,32 @@ def main() -> int:
         for grp in any_dups[:80]:
             a = next(g for g in grp if str(g.get("method", "")) in ("", "ANY"))
             md.append(f"| {a.get('source', '')} | `{a.get('path', '')}` | {' '.join(sorted(str(g.get('method', '')) or '(空)' for g in grp))} | {a.get('found_by', '')} |")
+        md.append("")
+
+    # 同じメソッドとパスを、別々のファイルの定義から 1 件にまとめたもの（同じソースに HTTP サーバーが複数ある場合の誤統合を疑う）
+    # ルート表とハンドラを別のファイルから書くのは普通なので、衝突しやすい形（ルート直下と、配下すべてを受けるパス）だけを挙げる
+    cross_file = [it for it in items if is_url_item(it) and len(it.get("_first_files", [])) > 1
+                  and (norm_path(it.get("path", "")) == "/" or norm_path(it.get("path", "")).endswith("{*}"))]
+    if cross_file:
+        md += [f"## 別々のファイルの定義を、同じパスとして 1 件にまとめたもの（ルート直下と、配下すべてを受けるパス）: {len(cross_file)} 件", "",
+               "ルート表とハンドラのように、同じ入口を別のファイルから書いたものなら正しい。**同じソースの中に別の HTTP サーバーや別の動作モードがあって、たまたま同じパスになっている**なら誤り。"
+               "誤りなら、片方に `aliases.jsonl` で `host`（`役割名:ポート` の形）を付けて分ける。", "",
+               "| ソース | メソッド パス | 根拠にされたファイル |", "|---|---|---|"]
+        for it in sorted(cross_file, key=lambda x: (norm_path(x.get("path", "")) not in ("/", "/{*}"), -len(x["_first_files"])))[:100]:
+            md.append(f"| {it.get('source', '')} | `{it.get('method', '')} {it.get('path', '')}` | {'<br>'.join(f.rsplit('/', 2)[-2] + '/' + f.rsplit('/', 1)[-1] if '/' in f else f for f in it['_first_files'][:5])} |")
+        if len(cross_file) > 100:
+            md.append(f"| … | ほか {len(cross_file) - 100} 件 | |")
+        md.append("")
+
+    md += ["## 解釈点と入口の結び付け", "",
+           f"解釈点の `fed_by` のうち、入口の項目に結べたもの {fed_linked} 件（結べた入口には、`reaches` を自動で足してある）。**結べなかった書き方: {len(fed_unmatched)} 通り。**", ""]
+    if fed_unmatched:
+        md += ["`fed_by` は、入口の項目と同じ書き方（`POST /api/x`、`server-action:名前`、キュー名など、その入口の `method` と `path`）で書くと結ばれる。"
+               "結べなかったものは、`overrides.jsonl` で `fed_by` を入口の書き方に直す（多いものから）。", "",
+               "| fed_by の書き方 | 件数 |", "|---|---:|"]
+        md += [f"| `{s[:110]}` | {n} |" for s, n in fed_unmatched.most_common(80)]
+        if len(fed_unmatched) > 80:
+            md.append(f"| … ほか {len(fed_unmatched) - 80} 通り | |")
         md.append("")
 
     multi_host = [it for it in items if it.get("also_hosts")]
