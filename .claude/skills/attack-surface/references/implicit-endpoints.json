@@ -1,0 +1,608 @@
+{
+ "_about": [
+  "暗黙エンドポイントの知識ベース: 「この依存・イメージ・記述があると、コードに書かれていなくても存在し得るエンドポイント」の一覧。",
+  "全部読む必要はない。inventory.py がこの入力に関係する項目だけを work/knowledge.md に抜き出す。ここを直接引くのは、抜粋に無い依存を調べたいとき（ID や依存名で検索する）。",
+  "check.py もこれを使う: 手がかりが見つかった項目のエンドポイントが、検出項目に 1 つも出てこなければ「言及漏れ」として報告する。",
+  "when = 手がかり（いずれか 1 つで該当）。npm pypi maven go gem composer nuget cargo hex pub: 依存名（末尾 * は前方一致） / docker: コンテナイメージ名 / files: パスに対する正規表現 / code: {glob, regex}（glob に合うファイルの中身に対する正規表現）",
+  "endpoints = m: メソッド  p: パス  tags: 特徴  c: 既定で存在する確からしさ (high / medium / low)  note: 診断員向けの補足  proto: http 以外のとき  port: 既定ポート",
+  "base: spring_context = Spring の context-path が設定されていればその配下になる。パス中の {admin} {mount} {router} などは、組み込まれている場所を読んで置き換える。",
+  "網羅ではない。載っていない依存についても、既定で何を公開するかを自分の知識で考えること。設定で無効化・移動できるものが多いので、該当の設定を必ず読む。",
+  "載せるときは origin: implicit。根拠は、組み込んでいる行（無ければ依存を宣言している行）。c が low のものは confidence も low にする。",
+  "追記は自由。社内の共通基盤が生やすエンドポイントをここへ足せば、次回から抜粋と検査の対象になる。1 エンドポイント 1 行の体裁を保つこと。"
+ ],
+ "entries": [
+  {"id": "nextjs", "name": "Next.js", "section": "JavaScript / TypeScript", "when": {"npm": ["next"]}, "endpoints": [
+   {"m": "GET", "p": "/_next/image", "tags": ["url-input"], "c": "high", "note": "画像最適化エンドポイント (?url=&w=&q=)。images.remotePatterns/domains の設定が緩いと SSRF・オープンプロキシになる"},
+   {"m": "GET", "p": "/_next/static/{path*}", "tags": ["static"], "c": "high", "note": "ビルド済み JS。ソースマップ公開の有無と、バンドル内の非公開 API パス・キーを確認"},
+   {"m": "GET", "p": "/_next/data/{buildId}/{page}.json", "c": "medium", "note": "Pages Router の getServerSideProps/getStaticProps の生データ。画面では隠している項目が JSON に出ていないか確認"},
+   {"m": "POST", "p": "/{page}", "tags": ["framework-protocol", "state-changing"], "c": "medium", "note": "Server Actions: ページのパスへの POST に Next-Action ヘッダを付けて呼ぶ。'use server' の関数は画面から呼ばれていなくても ID 指定で呼べる。App Router を使っていれば、関数を 1 つも書いていなくても復元の経路自体はある"},
+   {"m": "GET", "p": "/{page}?_rsc={id}", "tags": ["framework-protocol"], "c": "medium", "note": "RSC ペイロードの取得（RSC: 1 ヘッダ）。画面に出していないデータがペイロードに含まれていないか"},
+   {"m": "GET", "p": "/_next/webpack-hmr", "proto": "websocket", "tags": ["dev-only"], "c": "low", "note": "next dev で起動している場合のみ（開発サーバが検証・本番で動いていないか）"},
+   {"m": "GET", "p": "/__nextjs_original-stack-frame", "tags": ["dev-only", "debug"], "c": "low", "note": "next dev のエラーオーバーレイ用。ソースの位置と内容を返す"}
+  ]},
+  {"id": "next-auth", "name": "NextAuth.js / Auth.js", "section": "JavaScript / TypeScript", "when": {"npm": ["next-auth", "@auth/core", "@auth/nextjs"]}, "endpoints": [
+   {"m": "GET", "p": "/api/auth/signin", "tags": ["auth-flow"]},
+   {"m": "POST", "p": "/api/auth/signin/{provider}", "tags": ["auth-flow"]},
+   {"m": "GET,POST", "p": "/api/auth/callback/{provider}", "tags": ["auth-flow"], "note": "OAuth コールバック / Credentials ログインの実体"},
+   {"m": "GET,POST", "p": "/api/auth/signout", "tags": ["auth-flow"]},
+   {"m": "GET", "p": "/api/auth/session", "tags": ["auth-flow"]},
+   {"m": "GET", "p": "/api/auth/csrf", "tags": ["auth-flow"]},
+   {"m": "GET", "p": "/api/auth/providers", "tags": ["auth-flow"], "note": "有効な認証プロバイダ一覧が無認証で取得できる"},
+   {"m": "GET", "p": "/api/auth/error", "tags": ["auth-flow"]}
+  ]},
+  {"id": "nuxt", "name": "Nuxt", "section": "JavaScript / TypeScript", "when": {"npm": ["nuxt", "nuxt3", "nuxt-edge"]}, "endpoints": [
+   {"m": "GET", "p": "/_nuxt/{path*}", "tags": ["static"], "c": "high", "note": "ビルド済み JS。バンドル内の API パスを確認"},
+   {"m": "GET", "p": "/__nuxt_error", "c": "medium", "note": "エラーページのレンダリング用エンドポイント"}
+  ]},
+  {"id": "nuxt-image", "name": "Nuxt Image (IPX)", "section": "JavaScript / TypeScript", "when": {"npm": ["@nuxt/image", "@nuxt/image-edge", "ipx"]}, "endpoints": [
+   {"m": "GET", "p": "/_ipx/{modifiers}/{path*}", "tags": ["url-input"], "note": "画像変換エンドポイント。外部 URL を許可していると SSRF・DoS の入口"}
+  ]},
+  {"id": "nuxt-content", "name": "Nuxt Content", "section": "JavaScript / TypeScript", "when": {"npm": ["@nuxt/content"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/api/_content/query", "c": "medium", "note": "コンテンツ問い合わせ API。下書き・非公開コンテンツが取得できないか確認"}
+  ]},
+  {"id": "sveltekit", "name": "SvelteKit", "section": "JavaScript / TypeScript", "when": {"npm": ["@sveltejs/kit"]}, "endpoints": [
+   {"m": "GET", "p": "/_app/immutable/{path*}", "tags": ["static"], "c": "high"},
+   {"m": "GET", "p": "/_app/version.json", "c": "high"},
+   {"m": "GET", "p": "/{page}/__data.json", "c": "medium", "note": "各ページの load() が返す生データ。画面に出していない項目が含まれていないか確認"}
+  ]},
+  {"id": "astro", "name": "Astro", "section": "JavaScript / TypeScript", "when": {"npm": ["astro"]}, "endpoints": [
+   {"m": "GET", "p": "/_image", "tags": ["url-input"], "c": "medium", "note": "SSR 時の画像最適化エンドポイント (?href=)"},
+   {"m": "POST", "p": "/_actions/{name}", "c": "low", "note": "Astro Actions を使っている場合の RPC エンドポイント"}
+  ]},
+  {"id": "socketio", "name": "Socket.IO", "section": "JavaScript / TypeScript", "when": {"npm": ["socket.io"], "pypi": ["python-socketio", "flask-socketio"], "go": ["googollee/go-socket.io"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/socket.io/", "proto": "ws", "c": "high", "note": "Socket.IO のハンドシェイク兼トランスポート。HTTP の認証ミドルウェアを通らない実装が多いので、接続時・イベント単位の認可を確認"}
+  ]},
+  {"id": "apollo-server", "name": "Apollo Server", "section": "JavaScript / TypeScript", "when": {"npm": ["apollo-server", "apollo-server-express", "apollo-server-koa", "apollo-server-fastify", "apollo-server-lambda", "apollo-server-micro", "@apollo/server"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/graphql", "proto": "graphql", "c": "medium", "note": "既定パス（standalone は /）。introspection と Sandbox/Playground が本番で有効になっていないか確認"}
+  ]},
+  {"id": "graphql-yoga", "name": "GraphQL Yoga", "section": "JavaScript / TypeScript", "when": {"npm": ["graphql-yoga", "@graphql-yoga/node"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/graphql", "proto": "graphql", "c": "medium", "note": "既定で GraphiQL が有効"}
+  ]},
+  {"id": "mercurius", "name": "Mercurius (Fastify GraphQL)", "section": "JavaScript / TypeScript", "when": {"npm": ["mercurius"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/graphql", "proto": "graphql", "c": "medium"},
+   {"m": "GET", "p": "/graphiql", "tags": ["debug"], "c": "low", "note": "graphiql: true のとき有効"}
+  ]},
+  {"id": "nestjs-graphql", "name": "NestJS GraphQL", "section": "JavaScript / TypeScript", "when": {"npm": ["@nestjs/graphql"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/graphql", "proto": "graphql", "c": "medium", "note": "GraphQLModule の既定パス。playground / introspection の設定を確認"}
+  ]},
+  {"id": "fastify-swagger", "name": "@fastify/swagger-ui", "section": "JavaScript / TypeScript", "when": {"npm": ["@fastify/swagger-ui", "fastify-swagger"]}, "endpoints": [
+   {"m": "GET", "p": "/documentation", "tags": ["debug"], "c": "medium", "note": "Swagger UI（routePrefix 既定値）"},
+   {"m": "GET", "p": "/documentation/json", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/documentation/yaml", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "strapi", "name": "Strapi", "section": "JavaScript / TypeScript", "when": {"npm": ["@strapi/strapi", "strapi"]}, "endpoints": [
+   {"m": "GET", "p": "/admin", "tags": ["admin"], "c": "high", "note": "管理パネル"},
+   {"m": "POST", "p": "/admin/login", "tags": ["admin", "auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/api/{collection}", "c": "high", "note": "コンテンツタイプごとに自動生成される REST。Public ロールの権限設定を確認"},
+   {"m": "GET,PUT,DELETE", "p": "/api/{collection}/{id}", "c": "high"},
+   {"m": "POST", "p": "/api/auth/local", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/api/auth/local/register", "tags": ["auth-flow"], "c": "high", "note": "既定で自己登録が有効"},
+   {"m": "POST", "p": "/api/auth/forgot-password", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/api/auth/reset-password", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET", "p": "/api/connect/{provider}", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET", "p": "/api/users/me", "c": "high"},
+   {"m": "GET,POST", "p": "/api/upload", "tags": ["upload"], "c": "high"},
+   {"m": "GET", "p": "/_health", "c": "high"}
+  ]},
+  {"id": "adminjs", "name": "AdminJS", "section": "JavaScript / TypeScript", "when": {"npm": ["adminjs", "admin-bro"]}, "endpoints": [
+   {"m": "GET", "p": "/admin", "tags": ["admin"], "c": "medium", "note": "rootPath の既定値。認証なしで組み込まれていないか確認"}
+  ]},
+  {"id": "flask", "name": "Flask", "when": {"pypi": ["flask", "quart"]}, "endpoints": [
+   {"m": "GET", "p": "/static/{filename*}", "tags": ["static"], "c": "high", "note": "Flask 既定の静的ファイル配信"}
+  ]},
+  {"id": "flask-debug", "name": "Flask デバッグモード", "section": "Python", "when": {"code": [{"glob": "*.py", "regex": "\\.run\\([^)]*debug\\s*=\\s*True"}]}, "endpoints": [
+   {"m": "GET,POST", "p": "/console", "tags": ["debug"], "c": "medium", "note": "Werkzeug デバッガのコンソール。debug=True のまま公開されると任意コード実行"}
+  ]},
+  {"id": "django-debug-toolbar", "name": "Django Debug Toolbar", "section": "Python", "when": {"pypi": ["django-debug-toolbar"]}, "endpoints": [
+   {"m": "GET", "p": "/__debug__/{path*}", "tags": ["debug"], "c": "medium", "note": "SQL・設定値・リクエスト履歴が閲覧できる。本番で INTERNAL_IPS/DEBUG が緩んでいないか確認"}
+  ]},
+  {"id": "django-silk", "name": "django-silk", "section": "Python", "when": {"pypi": ["django-silk"]}, "endpoints": [
+   {"m": "GET", "p": "/silk/", "tags": ["debug"], "c": "low", "note": "プロファイラ UI。リクエスト/レスポンス本文が残る"}
+  ]},
+  {"id": "flask-admin", "name": "Flask-Admin", "section": "Python", "when": {"pypi": ["flask-admin"]}, "endpoints": [
+   {"m": "GET", "p": "/admin/", "tags": ["admin"], "c": "medium", "note": "既定では認証なし。is_accessible の実装を確認"}
+  ]},
+  {"id": "flasgger", "name": "Flasgger", "section": "Python", "when": {"pypi": ["flasgger"]}, "endpoints": [
+   {"m": "GET", "p": "/apidocs/", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/apispec_1.json", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "flask-restx", "name": "Flask-RESTX / RESTPlus", "section": "Python", "when": {"pypi": ["flask-restx", "flask-restplus"]}, "endpoints": [
+   {"m": "GET", "p": "/swagger.json", "tags": ["debug"], "c": "medium", "note": "API 定義（Swagger UI は doc= で指定したパス、既定は /）"}
+  ]},
+  {"id": "sqladmin", "name": "SQLAdmin / Starlette-Admin", "section": "Python", "when": {"pypi": ["sqladmin", "starlette-admin", "fastapi-admin"]}, "endpoints": [
+   {"m": "GET", "p": "/admin", "tags": ["admin"], "c": "medium", "note": "authentication_backend 未指定だと無認証"}
+  ]},
+  {"id": "prometheus-python", "name": "Prometheus クライアント", "section": "Python", "when": {"pypi": ["prometheus-client", "prometheus-fastapi-instrumentator", "django-prometheus", "starlette-exporter", "prometheus-flask-exporter"]}, "endpoints": [
+   {"m": "GET", "p": "/metrics", "tags": ["debug"], "c": "low", "note": "メトリクス。内部パス・ラベルから情報が漏れる"}
+  ]},
+  {"id": "gradio", "name": "Gradio", "section": "Python", "when": {"pypi": ["gradio"]}, "endpoints": [
+   {"m": "GET", "p": "/config", "c": "medium", "note": "コンポーネント構成と API 一覧"},
+   {"m": "GET", "p": "/info", "c": "medium"},
+   {"m": "POST", "p": "/api/{api_name}", "c": "medium"},
+   {"m": "POST", "p": "/queue/join", "c": "medium"},
+   {"m": "POST", "p": "/upload", "tags": ["upload"], "c": "medium"},
+   {"m": "GET", "p": "/file={path}", "tags": ["file-access"], "c": "medium", "note": "ファイル配信。過去にパストラバーサル/任意ファイル読み取りの脆弱性が複数ある"}
+  ]},
+  {"id": "streamlit", "name": "Streamlit", "section": "Python", "when": {"pypi": ["streamlit"]}, "endpoints": [
+   {"m": "GET", "p": "/_stcore/stream", "proto": "ws", "c": "medium", "note": "全操作がこの WebSocket を通る"},
+   {"m": "GET", "p": "/_stcore/health", "c": "medium"},
+   {"m": "PUT,DELETE", "p": "/_stcore/upload_file/{session_id}/{file_id}", "tags": ["upload"], "c": "medium"}
+  ]},
+  {"id": "spring-web", "name": "Spring MVC", "when": {"maven": ["spring-boot-starter-web", "spring-webmvc", "spring-web"]}, "base": "spring_context", "endpoints": [
+   {"m": "ANY", "p": "/error", "c": "high", "note": "Spring Boot 既定のエラーエンドポイント。server.error.include-stacktrace / include-message の設定で内部情報が出る"}
+  ]},
+  {"id": "spring-actuator", "name": "Spring Boot Actuator", "section": "JVM", "when": {"maven": ["spring-boot-starter-actuator", "spring-boot-actuator", "spring-boot-actuator-autoconfigure"]}, "base": "spring_context", "endpoints": [
+   {"m": "GET", "p": "/actuator", "tags": ["debug"], "c": "high", "note": "公開中のエンドポイント一覧"},
+   {"m": "GET", "p": "/actuator/health", "tags": ["debug"], "c": "high", "note": "既定で公開。show-details の設定で DB 等の内部情報が出る"},
+   {"m": "GET", "p": "/actuator/info", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/actuator/env", "tags": ["debug"], "c": "low", "note": "環境変数・設定値。exposure.include に含まれていると秘密情報が漏れる"},
+   {"m": "GET", "p": "/actuator/heapdump", "tags": ["debug"], "c": "low", "note": "ヒープダンプ。メモリ上の認証情報が取得できる"},
+   {"m": "GET", "p": "/actuator/threaddump", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/actuator/mappings", "tags": ["debug"], "c": "low", "note": "全ルート一覧"},
+   {"m": "GET", "p": "/actuator/beans", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/actuator/configprops", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/actuator/metrics", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/actuator/metrics/{name}", "tags": ["debug"], "c": "low"},
+   {"m": "GET,POST", "p": "/actuator/loggers/{name}", "tags": ["debug"], "c": "low", "note": "POST でログレベルを変更できる"},
+   {"m": "GET", "p": "/actuator/httpexchanges", "tags": ["debug"], "c": "low", "note": "直近リクエストのヘッダ（Boot 2 では /actuator/httptrace）"},
+   {"m": "GET", "p": "/actuator/logfile", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/actuator/prometheus", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/actuator/scheduledtasks", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/actuator/caches", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/actuator/sessions", "tags": ["debug"], "c": "low"},
+   {"m": "POST", "p": "/actuator/shutdown", "tags": ["debug"], "c": "low", "note": "有効化されているとアプリを停止できる"},
+   {"m": "GET,POST", "p": "/actuator/jolokia", "tags": ["debug"], "c": "low", "note": "JMX over HTTP。有効なら RCE 経路になり得る"},
+   {"m": "GET,POST", "p": "/actuator/gateway/routes", "tags": ["debug"], "c": "low", "note": "Spring Cloud Gateway 利用時。ルート書き換えによる RCE (CVE-2022-22947) の経路"},
+   {"m": "POST", "p": "/actuator/refresh", "tags": ["debug"], "c": "low"}
+  ]},
+  {"id": "springdoc", "name": "springdoc-openapi", "section": "JVM", "when": {"maven": ["springdoc-openapi*"]}, "base": "spring_context", "endpoints": [
+   {"m": "GET", "p": "/v3/api-docs", "tags": ["debug"], "c": "high", "note": "全 API 定義が無認証で取れることが多い"},
+   {"m": "GET", "p": "/v3/api-docs.yaml", "tags": ["debug"], "c": "high"},
+   {"m": "GET", "p": "/v3/api-docs/swagger-config", "tags": ["debug"], "c": "high"},
+   {"m": "GET", "p": "/swagger-ui.html", "tags": ["debug"], "c": "high"},
+   {"m": "GET", "p": "/swagger-ui/index.html", "tags": ["debug"], "c": "high"}
+  ]},
+  {"id": "springfox", "name": "Springfox Swagger", "section": "JVM", "when": {"maven": ["springfox-*"]}, "base": "spring_context", "endpoints": [
+   {"m": "GET", "p": "/v2/api-docs", "tags": ["debug"], "c": "high"},
+   {"m": "GET", "p": "/swagger-ui.html", "tags": ["debug"], "c": "high"},
+   {"m": "GET", "p": "/swagger-ui/", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/swagger-resources", "tags": ["debug"], "c": "high"},
+   {"m": "GET", "p": "/swagger-resources/configuration/ui", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "h2-console", "name": "H2 Console", "section": "JVM", "when": {"code": [{"glob": "application*.properties|application*.yml|application*.yaml", "regex": "h2[.:\\s]*\\n?\\s*console[.:\\s]*\\n?\\s*enabled\\s*[:=]\\s*true"}]}, "base": "spring_context", "endpoints": [
+   {"m": "GET,POST", "p": "/h2-console", "tags": ["debug", "admin"], "c": "high", "note": "DB コンソール。JDBC URL 経由で任意コード実行に至る"}
+  ]},
+  {"id": "spring-data-rest", "name": "Spring Data REST", "section": "JVM", "when": {"maven": ["spring-boot-starter-data-rest", "spring-data-rest-webmvc"]}, "base": "spring_context", "endpoints": [
+   {"m": "GET", "p": "/profile", "c": "medium", "note": "ALPS メタデータ。公開リポジトリ一覧"},
+   {"m": "GET,POST", "p": "/{repository}", "c": "medium", "note": "Repository インタフェースが自動で REST 公開される。@RepositoryRestResource(exported=false) でない限り全エンティティが対象"},
+   {"m": "GET,PUT,PATCH,DELETE", "p": "/{repository}/{id}", "c": "medium"},
+   {"m": "GET", "p": "/{repository}/search", "c": "medium", "note": "findBy… クエリメソッドが自動公開される"},
+   {"m": "GET", "p": "/{repository}/search/{query}", "c": "medium"},
+   {"m": "GET,PUT,DELETE", "p": "/{repository}/{id}/{association}", "c": "low"}
+  ]},
+  {"id": "spring-graphql", "name": "Spring GraphQL", "section": "JVM", "when": {"maven": ["spring-boot-starter-graphql", "spring-graphql", "graphql-spring-boot-starter", "dgs-*", "graphql-dgs-spring-boot-starter"]}, "base": "spring_context", "endpoints": [
+   {"m": "POST", "p": "/graphql", "proto": "graphql", "c": "medium"},
+   {"m": "GET", "p": "/graphiql", "tags": ["debug"], "c": "low", "note": "spring.graphql.graphiql.enabled=true のとき"}
+  ]},
+  {"id": "spring-oauth2-client", "name": "Spring Security OAuth2 Client", "section": "JVM", "when": {"maven": ["spring-boot-starter-oauth2-client", "spring-security-oauth2-client"]}, "base": "spring_context", "endpoints": [
+   {"m": "GET", "p": "/oauth2/authorization/{registrationId}", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET", "p": "/login/oauth2/code/{registrationId}", "tags": ["auth-flow"], "c": "medium", "note": "OAuth コールバック"}
+  ]},
+  {"id": "spring-authorization-server", "name": "Spring Authorization Server", "section": "JVM", "when": {"maven": ["spring-security-oauth2-authorization-server", "spring-boot-starter-oauth2-authorization-server"]}, "base": "spring_context", "endpoints": [
+   {"m": "GET,POST", "p": "/oauth2/authorize", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/oauth2/token", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET", "p": "/oauth2/jwks", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/oauth2/introspect", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/oauth2/revoke", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET", "p": "/.well-known/oauth-authorization-server", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET", "p": "/.well-known/openid-configuration", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET,POST", "p": "/userinfo", "tags": ["auth-flow"], "c": "medium"}
+  ]},
+  {"id": "spring-saml", "name": "Spring Security SAML2", "section": "JVM", "when": {"maven": ["spring-security-saml2-service-provider"]}, "base": "spring_context", "endpoints": [
+   {"m": "GET", "p": "/saml2/authenticate/{registrationId}", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/login/saml2/sso/{registrationId}", "tags": ["auth-flow"], "c": "medium", "note": "ACS。署名検証・XML 処理の診断対象"},
+   {"m": "GET", "p": "/saml2/service-provider-metadata/{registrationId}", "tags": ["auth-flow"], "c": "medium"}
+  ]},
+  {"id": "go-pprof", "name": "Go pprof", "section": "Go", "when": {"go": ["github.com/gin-contrib/pprof", "github.com/gofiber/fiber/v2/middleware/pprof"], "code": [{"glob": "*.go", "regex": "\"net/http/pprof\""}]}, "endpoints": [
+   {"m": "GET", "p": "/debug/pprof/", "tags": ["debug"], "c": "medium", "note": "`import _ \"net/http/pprof\"` は DefaultServeMux に自動登録される。ListenAndServe(addr, nil) のサーバがあれば外部から到達する"},
+   {"m": "GET", "p": "/debug/pprof/heap", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/debug/pprof/goroutine", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/debug/pprof/profile", "tags": ["debug"], "c": "medium", "note": "CPU プロファイル取得（?seconds= で長時間占有 → DoS）"},
+   {"m": "GET", "p": "/debug/pprof/cmdline", "tags": ["debug"], "c": "medium", "note": "起動引数（秘密情報が含まれ得る）"},
+   {"m": "GET", "p": "/debug/pprof/trace", "tags": ["debug"], "c": "medium"},
+   {"m": "GET,POST", "p": "/debug/pprof/symbol", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "go-expvar", "name": "Go expvar", "section": "Go", "when": {"code": [{"glob": "*.go", "regex": "^\\s*(?:import\\s+)?(?:_\\s+)?\"expvar\""}]}, "endpoints": [
+   {"m": "GET", "p": "/debug/vars", "tags": ["debug"], "c": "medium", "note": "expvar は import しただけで DefaultServeMux に登録される。cmdline と memstats が見える"}
+  ]},
+  {"id": "rails", "name": "Ruby on Rails", "section": "Ruby", "when": {"gem": ["rails", "railties"]}, "endpoints": [
+   {"m": "GET", "p": "/rails/info/routes", "tags": ["debug"], "c": "low", "note": "development 環境のみ。環境変数の誤設定で本番に出ていないか確認"},
+   {"m": "GET", "p": "/rails/info/properties", "tags": ["debug"], "c": "low"},
+   {"m": "GET", "p": "/rails/mailers", "tags": ["debug"], "c": "low", "note": "メールプレビュー（development / show_previews=true）"}
+  ]},
+  {"id": "rails-activestorage", "name": "Active Storage", "section": "Ruby", "when": {"code": [{"glob": "config/application.rb", "regex": "rails/all|active_storage/engine"}], "files": ["(^|/)config/storage\\.yml$"]}, "endpoints": [
+   {"m": "POST", "p": "/rails/active_storage/direct_uploads", "tags": ["upload"], "c": "high", "note": "routes.rb に無くても自動で生える。既定では認証不要で任意ファイルのアップロード枠を作れる"},
+   {"m": "GET", "p": "/rails/active_storage/blobs/redirect/{signed_id}/{filename*}", "tags": ["file-access"], "c": "high", "note": "署名付き ID を知っていれば認証なしで取得できる（URL 漏えい = ファイル漏えい）"},
+   {"m": "GET", "p": "/rails/active_storage/blobs/proxy/{signed_id}/{filename*}", "tags": ["file-access"], "c": "high"},
+   {"m": "GET", "p": "/rails/active_storage/representations/redirect/{signed_blob_id}/{variation_key}/{filename*}", "tags": ["file-access"], "c": "high", "note": "variation_key 経由の画像変換（ImageMagick/libvips）の入口"},
+   {"m": "GET", "p": "/rails/active_storage/representations/proxy/{signed_blob_id}/{variation_key}/{filename*}", "tags": ["file-access"], "c": "high"},
+   {"m": "GET", "p": "/rails/active_storage/disk/{encoded_key}/{filename*}", "tags": ["file-access"], "c": "medium", "note": "Disk サービス利用時"},
+   {"m": "PUT", "p": "/rails/active_storage/disk/{encoded_token}", "tags": ["upload"], "c": "medium"}
+  ]},
+  {"id": "rails-actionmailbox", "name": "Action Mailbox", "section": "Ruby", "when": {"code": [{"glob": "config/application.rb", "regex": "rails/all|action_mailbox/engine"}]}, "endpoints": [
+   {"m": "POST", "p": "/rails/action_mailbox/relay/inbound_emails", "tags": ["webhook"], "c": "low", "note": "rails/all を require すると自動で生える受信用 Ingress"},
+   {"m": "POST", "p": "/rails/action_mailbox/postmark/inbound_emails", "tags": ["webhook"], "c": "low"},
+   {"m": "POST", "p": "/rails/action_mailbox/sendgrid/inbound_emails", "tags": ["webhook"], "c": "low"},
+   {"m": "POST", "p": "/rails/action_mailbox/mandrill/inbound_emails", "tags": ["webhook"], "c": "low"},
+   {"m": "POST", "p": "/rails/action_mailbox/mailgun/inbound_emails/mime", "tags": ["webhook"], "c": "low"},
+   {"m": "GET,POST", "p": "/rails/conductor/action_mailbox/inbound_emails", "tags": ["debug"], "c": "low", "note": "development 用のメール投入 UI"}
+  ]},
+  {"id": "rails-actioncable", "name": "Action Cable", "section": "Ruby", "when": {"code": [{"glob": "config/application.rb", "regex": "rails/all|action_cable/engine"}], "files": ["(^|/)app/channels/.+\\.rb$"]}, "endpoints": [
+   {"m": "GET", "p": "/cable", "proto": "ws", "c": "medium", "note": "WebSocket。チャンネル購読時の認可 (connection.rb / subscribed) を確認"}
+  ]},
+  {"id": "turbo-rails", "name": "Turbo (Hotwire)", "section": "Ruby", "when": {"gem": ["turbo-rails"]}, "endpoints": [
+   {"m": "GET", "p": "/recede_historical_location", "c": "low"},
+   {"m": "GET", "p": "/resume_historical_location", "c": "low"},
+   {"m": "GET", "p": "/refresh_historical_location", "c": "low"}
+  ]},
+  {"id": "wordpress", "name": "WordPress", "section": "PHP", "when": {"files": ["(^|/)wp-config(-sample)?\\.php$", "(^|/)wp-content/(plugins|themes)/", "(^|/)wp-includes/"], "composer": ["johnpbloch/wordpress", "roots/wordpress"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/wp-login.php", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET", "p": "/wp-admin/", "tags": ["admin"], "c": "high"},
+   {"m": "GET,POST", "p": "/wp-admin/admin-ajax.php", "c": "high", "note": "wp_ajax_* / wp_ajax_nopriv_* フックの入口（?action=）"},
+   {"m": "GET,POST", "p": "/wp-admin/admin-post.php", "c": "high"},
+   {"m": "POST", "p": "/xmlrpc.php", "c": "high", "note": "ブルートフォース増幅・pingback SSRF の定番"},
+   {"m": "GET", "p": "/wp-json/", "c": "high", "note": "REST API ルート一覧"},
+   {"m": "GET", "p": "/wp-json/wp/v2/users", "c": "high", "note": "ユーザー名列挙"},
+   {"m": "GET,POST", "p": "/wp-cron.php", "c": "high"},
+   {"m": "POST", "p": "/wp-comments-post.php", "c": "high"},
+   {"m": "GET", "p": "/wp-content/uploads/{path*}", "tags": ["static", "file-access"], "c": "high", "note": "ディレクトリリスティングと実行可能ファイルの配置を確認"},
+   {"m": "GET", "p": "/readme.html", "c": "medium", "note": "バージョン情報"}
+  ]},
+  {"id": "laravel-sanctum", "name": "Laravel Sanctum", "section": "PHP", "when": {"composer": ["laravel/sanctum"]}, "endpoints": [
+   {"m": "GET", "p": "/sanctum/csrf-cookie", "tags": ["auth-flow"], "c": "high"}
+  ]},
+  {"id": "laravel-passport", "name": "Laravel Passport", "section": "PHP", "when": {"composer": ["laravel/passport"]}, "endpoints": [
+   {"m": "GET,POST,DELETE", "p": "/oauth/authorize", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/oauth/token", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/oauth/token/refresh", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET", "p": "/oauth/tokens", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "DELETE", "p": "/oauth/tokens/{token_id}", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET,POST", "p": "/oauth/clients", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "PUT,DELETE", "p": "/oauth/clients/{client_id}", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET", "p": "/oauth/scopes", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET,POST", "p": "/oauth/personal-access-tokens", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "DELETE", "p": "/oauth/personal-access-tokens/{token_id}", "tags": ["auth-flow"], "c": "medium"}
+  ]},
+  {"id": "laravel-telescope", "name": "Laravel Telescope", "section": "PHP", "when": {"composer": ["laravel/telescope"]}, "endpoints": [
+   {"m": "GET", "p": "/telescope", "tags": ["debug", "admin"], "c": "high", "note": "全リクエスト・クエリ・ジョブ・メール・例外の閲覧 UI。local 以外では Gate で制限されるが設定漏れが多い"},
+   {"m": "GET,POST", "p": "/telescope/telescope-api/{path*}", "tags": ["debug"], "c": "high"}
+  ]},
+  {"id": "laravel-horizon", "name": "Laravel Horizon", "section": "PHP", "when": {"composer": ["laravel/horizon"]}, "endpoints": [
+   {"m": "GET", "p": "/horizon", "tags": ["admin"], "c": "high", "note": "キュー監視 UI"},
+   {"m": "GET,POST", "p": "/horizon/api/{path*}", "tags": ["admin"], "c": "high"}
+  ]},
+  {"id": "laravel-pulse", "name": "Laravel Pulse", "section": "PHP", "when": {"composer": ["laravel/pulse"]}, "endpoints": [
+   {"m": "GET", "p": "/pulse", "tags": ["debug", "admin"], "c": "high"}
+  ]},
+  {"id": "livewire", "name": "Livewire", "section": "PHP", "when": {"composer": ["livewire/livewire"]}, "endpoints": [
+   {"m": "POST", "p": "/livewire/update", "c": "medium", "note": "Livewire v3 の全コンポーネント操作の入口（v2 は /livewire/message/{name}）。public プロパティ・メソッドは全てここから呼べる"},
+   {"m": "POST", "p": "/livewire/message/{name}", "c": "low", "note": "Livewire v2"},
+   {"m": "POST", "p": "/livewire/upload-file", "tags": ["upload"], "c": "medium", "note": "署名付き URL だがファイルアップロードの入口"},
+   {"m": "GET", "p": "/livewire/preview-file/{filename}", "tags": ["file-access"], "c": "medium"}
+  ]},
+  {"id": "laravel-ignition", "name": "Ignition (Laravel エラーページ)", "section": "PHP", "when": {"composer": ["facade/ignition", "spatie/laravel-ignition"]}, "endpoints": [
+   {"m": "GET", "p": "/_ignition/health-check", "tags": ["debug"], "c": "medium", "note": "APP_DEBUG=true のとき有効"},
+   {"m": "POST", "p": "/_ignition/execute-solution", "tags": ["debug"], "c": "medium", "note": "APP_DEBUG=true で到達可能。旧版は RCE (CVE-2021-3129)"},
+   {"m": "POST", "p": "/_ignition/update-config", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "laravel-debugbar", "name": "Laravel Debugbar", "section": "PHP", "when": {"composer": ["barryvdh/laravel-debugbar"]}, "endpoints": [
+   {"m": "GET", "p": "/_debugbar/open", "tags": ["debug"], "c": "medium", "note": "過去リクエストのデバッグ情報（セッション・クエリ）"},
+   {"m": "GET", "p": "/_debugbar/assets/{path*}", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "laravel-nova", "name": "Laravel Nova", "section": "PHP", "when": {"composer": ["laravel/nova"]}, "endpoints": [
+   {"m": "GET", "p": "/nova", "tags": ["admin"], "c": "high"},
+   {"m": "ANY", "p": "/nova-api/{path*}", "tags": ["admin"], "c": "high"}
+  ]},
+  {"id": "filament", "name": "Filament", "section": "PHP", "when": {"composer": ["filament/filament"]}, "endpoints": [
+   {"m": "GET", "p": "/admin", "tags": ["admin"], "c": "medium", "note": "パネルの既定パス"},
+   {"m": "GET,POST", "p": "/admin/login", "tags": ["admin", "auth-flow"], "c": "medium"}
+  ]},
+  {"id": "laravel-fortify", "name": "Laravel Fortify / Jetstream / Breeze", "section": "PHP", "when": {"composer": ["laravel/fortify", "laravel/jetstream"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/login", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/logout", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/register", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/forgot-password", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/reset-password", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET", "p": "/reset-password/{token}", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/two-factor-challenge", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/user/confirm-password", "tags": ["auth-flow"], "c": "high"},
+   {"m": "PUT", "p": "/user/password", "tags": ["auth-flow"], "c": "high"},
+   {"m": "PUT", "p": "/user/profile-information", "c": "high"},
+   {"m": "POST,DELETE", "p": "/user/two-factor-authentication", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/user/two-factor-recovery-codes", "tags": ["auth-flow"], "c": "high"}
+  ]},
+  {"id": "l5-swagger", "name": "L5-Swagger", "section": "PHP", "when": {"composer": ["darkaonline/l5-swagger"]}, "endpoints": [
+   {"m": "GET", "p": "/api/documentation", "tags": ["debug"], "c": "high"},
+   {"m": "GET", "p": "/docs/{jsonFile}", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "symfony-profiler", "name": "Symfony Web Profiler", "section": "PHP", "when": {"composer": ["symfony/web-profiler-bundle"]}, "endpoints": [
+   {"m": "GET", "p": "/_profiler", "tags": ["debug"], "c": "medium", "note": "dev 環境のまま公開されると全リクエストの中身・環境変数が閲覧できる"},
+   {"m": "GET", "p": "/_profiler/{token}", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/_profiler/phpinfo", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/_profiler/open", "tags": ["debug", "file-access"], "c": "medium", "note": "?file= でソース表示"},
+   {"m": "GET", "p": "/_wdt/{token}", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/_error/{code}", "tags": ["debug"], "c": "low"}
+  ]},
+  {"id": "symfony-fragment", "name": "Symfony Fragments", "section": "PHP", "when": {"code": [{"glob": "*.yaml|*.yml", "regex": "^\\s*fragments\\s*:"}]}, "endpoints": [
+   {"m": "GET", "p": "/_fragment", "tags": ["debug"], "c": "medium", "note": "APP_SECRET が漏れている/既定値だと署名を偽造して任意コントローラ実行 → RCE"}
+  ]},
+  {"id": "api-platform", "name": "API Platform", "section": "PHP", "when": {"composer": ["api-platform/core", "api-platform/symfony", "api-platform/laravel"]}, "endpoints": [
+   {"m": "GET", "p": "/api", "tags": ["debug"], "c": "medium", "note": "エントリポイント（Swagger UI）"},
+   {"m": "GET", "p": "/api/docs", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/api/docs.json", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/api/contexts/{shortName}", "c": "medium"}
+  ]},
+  {"id": "swashbuckle", "name": "Swashbuckle / NSwag", "section": ".NET", "when": {"nuget": ["Swashbuckle.AspNetCore", "Swashbuckle.AspNetCore.*", "NSwag.AspNetCore"]}, "endpoints": [
+   {"m": "GET", "p": "/swagger", "tags": ["debug"], "c": "medium", "note": "IsDevelopment() の外で UseSwagger している場合は本番でも公開される"},
+   {"m": "GET", "p": "/swagger/index.html", "tags": ["debug"], "c": "medium"},
+   {"m": "GET", "p": "/swagger/v1/swagger.json", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "hangfire", "name": "Hangfire", "section": ".NET", "when": {"nuget": ["Hangfire", "Hangfire.AspNetCore", "Hangfire.Core"]}, "endpoints": [
+   {"m": "GET", "p": "/hangfire", "tags": ["admin"], "c": "medium", "note": "ジョブ管理ダッシュボード。既定はローカルのみ許可だが Authorization フィルタの差し替えミスが多い"}
+  ]},
+  {"id": "aspnet-identity-ui", "name": "ASP.NET Core Identity UI", "section": ".NET", "when": {"nuget": ["Microsoft.AspNetCore.Identity.UI"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/Identity/Account/Login", "tags": ["auth-flow"], "c": "high", "note": "ソースに無い既定 UI（Razor Class Library）"},
+   {"m": "GET,POST", "p": "/Identity/Account/Register", "tags": ["auth-flow"], "c": "high", "note": "自己登録が意図せず有効になっていないか確認"},
+   {"m": "POST", "p": "/Identity/Account/Logout", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/Identity/Account/ForgotPassword", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/Identity/Account/ResetPassword", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET", "p": "/Identity/Account/ConfirmEmail", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/Identity/Account/ResendEmailConfirmation", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/Identity/Account/ExternalLogin", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/Identity/Account/LoginWith2fa", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/Identity/Account/LoginWithRecoveryCode", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/Identity/Account/Manage/{page}", "tags": ["auth-flow"], "c": "high"}
+  ]},
+  {"id": "aspnet-identity-api", "name": "ASP.NET Core Identity API (MapIdentityApi)", "section": ".NET", "when": {"code": [{"glob": "*.cs", "regex": "MapIdentityApi\\s*<"}]}, "endpoints": [
+   {"m": "POST", "p": "/register", "tags": ["auth-flow"], "c": "medium", "note": "MapIdentityApi が生やす。MapGroup のプレフィックスがあればその配下"},
+   {"m": "POST", "p": "/login", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/refresh", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET", "p": "/confirmEmail", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/resendConfirmationEmail", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/forgotPassword", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/resetPassword", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/manage/2fa", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET,POST", "p": "/manage/info", "tags": ["auth-flow"], "c": "medium"}
+  ]},
+  {"id": "identityserver", "name": "IdentityServer / OpenIddict", "section": ".NET", "when": {"nuget": ["Duende.IdentityServer", "IdentityServer4", "Duende.IdentityServer.*", "IdentityServer4.*"]}, "endpoints": [
+   {"m": "GET", "p": "/.well-known/openid-configuration", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET", "p": "/.well-known/openid-configuration/jwks", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/connect/authorize", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/connect/token", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/connect/userinfo", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "/connect/endsession", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/connect/introspect", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/connect/revocation", "tags": ["auth-flow"], "c": "high"},
+   {"m": "POST", "p": "/connect/deviceauthorization", "tags": ["auth-flow"], "c": "high"}
+  ]},
+  {"id": "miniprofiler", "name": "MiniProfiler", "section": ".NET", "when": {"nuget": ["MiniProfiler.AspNetCore", "MiniProfiler.AspNetCore.Mvc"], "gem": ["rack-mini-profiler"]}, "endpoints": [
+   {"m": "GET", "p": "/mini-profiler-resources/results-index", "tags": ["debug"], "c": "medium", "note": "過去リクエストのプロファイル一覧（SQL 含む）"},
+   {"m": "GET,POST", "p": "/mini-profiler-resources/results", "tags": ["debug"], "c": "medium"}
+  ]},
+  {"id": "elmah", "name": "ELMAH", "section": ".NET", "when": {"nuget": ["ElmahCore", "elmah", "Elmah.Mvc", "ElmahCore.Mvc"]}, "endpoints": [
+   {"m": "GET", "p": "/elmah", "tags": ["debug"], "c": "medium", "note": "例外ログ。Cookie・フォーム値が残る"},
+   {"m": "GET", "p": "/elmah.axd", "tags": ["debug"], "c": "low"}
+  ]},
+  {"id": "hotchocolate", "name": "Hot Chocolate (GraphQL)", "section": ".NET", "when": {"nuget": ["HotChocolate.AspNetCore"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/graphql", "proto": "graphql", "c": "medium", "note": "既定で GraphQL IDE (Nitro/Banana Cake Pop) が同じパスで有効"}
+  ]},
+  {"id": "blazor-server", "name": "Blazor Server", "section": ".NET", "when": {"code": [{"glob": "*.cs", "regex": "MapBlazorHub|AddInteractiveServerComponents"}]}, "endpoints": [
+   {"m": "GET,POST", "p": "/_blazor", "proto": "ws", "c": "medium", "note": "Blazor Server の SignalR 回線。UI イベントは全てここを通るので HTTP の認可属性とは別にコンポーネント側の認可を確認"}
+  ]},
+  {"id": "odata", "name": "OData", "section": ".NET", "when": {"nuget": ["Microsoft.AspNetCore.OData"]}, "endpoints": [
+   {"m": "GET", "p": "/odata/$metadata", "tags": ["debug"], "c": "low", "note": "全エンティティのスキーマ。$expand / $filter による過剰取得も診断対象"}
+  ]},
+  {"id": "phoenix", "name": "Phoenix", "section": "Rust / Elixir / Scala", "when": {"hex": ["phoenix"]}, "endpoints": [
+   {"m": "GET", "p": "/live/websocket", "proto": "ws", "c": "medium", "note": "LiveView のソケット。handle_event ごとの認可を確認"},
+   {"m": "GET,POST", "p": "/live/longpoll", "c": "low"}
+  ]},
+  {"id": "img-hasura", "name": "Hasura GraphQL Engine", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["hasura/graphql-engine"]}, "endpoints": [
+   {"m": "POST", "p": "/v1/graphql", "proto": "graphql", "port": 8080, "c": "high", "note": "テーブルがそのまま GraphQL になる。ロール別パーミッションと x-hasura-admin-secret の有無を確認"},
+   {"m": "POST", "p": "/v1/metadata", "tags": ["admin"], "port": 8080, "c": "high"},
+   {"m": "POST", "p": "/v2/query", "tags": ["admin"], "port": 8080, "c": "high", "note": "生 SQL 実行 API（admin secret 未設定なら無認証）"},
+   {"m": "GET", "p": "/console", "tags": ["admin"], "port": 8080, "c": "medium", "note": "HASURA_GRAPHQL_ENABLE_CONSOLE=true のとき"},
+   {"m": "GET", "p": "/healthz", "port": 8080, "c": "high"}
+  ]},
+  {"id": "img-postgrest", "name": "PostgREST", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["postgrest/postgrest"]}, "endpoints": [
+   {"m": "GET", "p": "/", "port": 3000, "c": "high", "note": "OpenAPI 定義（公開スキーマの全テーブル）"},
+   {"m": "GET,POST,PATCH,DELETE", "p": "/{table}", "port": 3000, "c": "high", "note": "テーブルが直接 REST になる。RLS と anon ロール権限を確認"},
+   {"m": "POST", "p": "/rpc/{function}", "port": 3000, "c": "high"}
+  ]},
+  {"id": "supabase", "name": "Supabase", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"npm": ["@supabase/supabase-js", "@supabase/ssr"], "pub": ["supabase_flutter", "supabase"], "pypi": ["supabase"], "files": ["(^|/)supabase/config\\.toml$"], "docker": ["supabase/gotrue", "supabase/postgres", "supabase/studio"]}, "endpoints": [
+   {"m": "GET,POST,PATCH,DELETE", "p": "/rest/v1/{table}", "c": "medium", "note": "anon キーはクライアントに露出する前提。全テーブルの RLS を診断対象にする"},
+   {"m": "POST", "p": "/rest/v1/rpc/{function}", "c": "medium"},
+   {"m": "POST", "p": "/auth/v1/signup", "tags": ["auth-flow"], "c": "medium", "note": "自己登録が無効化されているか確認"},
+   {"m": "POST", "p": "/auth/v1/token", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "POST", "p": "/auth/v1/recover", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET,PUT", "p": "/auth/v1/user", "tags": ["auth-flow"], "c": "medium"},
+   {"m": "GET,POST,PUT,DELETE", "p": "/storage/v1/object/{bucket}/{path*}", "tags": ["upload", "file-access"], "c": "medium", "note": "バケットのポリシーを確認"},
+   {"m": "GET", "p": "/storage/v1/object/public/{bucket}/{path*}", "tags": ["file-access"], "c": "medium"},
+   {"m": "POST", "p": "/functions/v1/{name}", "c": "medium"},
+   {"m": "POST", "p": "/graphql/v1", "proto": "graphql", "c": "low"},
+   {"m": "GET", "p": "/realtime/v1/websocket", "proto": "ws", "c": "low"}
+  ]},
+  {"id": "img-keycloak", "name": "Keycloak", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["keycloak/keycloak", "jboss/keycloak", "bitnami/keycloak"]}, "endpoints": [
+   {"m": "GET", "p": "/realms/{realm}/.well-known/openid-configuration", "tags": ["auth-flow"], "port": 8080, "c": "high"},
+   {"m": "GET,POST", "p": "/realms/{realm}/protocol/openid-connect/auth", "tags": ["auth-flow"], "port": 8080, "c": "high"},
+   {"m": "POST", "p": "/realms/{realm}/protocol/openid-connect/token", "tags": ["auth-flow"], "port": 8080, "c": "high"},
+   {"m": "GET", "p": "/realms/{realm}/account", "tags": ["auth-flow"], "port": 8080, "c": "high"},
+   {"m": "GET", "p": "/admin/", "tags": ["admin"], "port": 8080, "c": "high", "note": "管理コンソール。外部公開されていないか確認"},
+   {"m": "ANY", "p": "/admin/realms/{realm}/{path*}", "tags": ["admin"], "port": 8080, "c": "high"}
+  ]},
+  {"id": "img-minio", "name": "MinIO", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["minio/minio", "bitnami/minio"]}, "endpoints": [
+   {"m": "ANY", "p": "/{bucket}/{key*}", "port": 9000, "c": "high", "note": "S3 互換 API。匿名アクセスポリシーと既定資格情報 (minioadmin) を確認"},
+   {"m": "GET", "p": "/minio/health/live", "port": 9000, "c": "high"},
+   {"m": "GET", "p": "/", "tags": ["admin"], "port": 9001, "c": "medium", "note": "管理コンソール"}
+  ]},
+  {"id": "img-rabbitmq-mgmt", "name": "RabbitMQ Management", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["rabbitmq"]}, "endpoints": [
+   {"m": "GET", "p": "/api/overview", "tags": ["admin"], "port": 15672, "c": "low", "note": "management タグのイメージなら管理 API/UI。guest/guest の既定資格情報を確認"}
+  ]},
+  {"id": "img-elasticsearch", "name": "Elasticsearch / OpenSearch", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["elasticsearch", "elasticsearch/elasticsearch", "opensearchproject/opensearch", "bitnami/elasticsearch"]}, "endpoints": [
+   {"m": "GET", "p": "/_cat/indices", "tags": ["admin"], "port": 9200, "c": "high", "note": "security 無効 (xpack.security.enabled=false) なら無認証で全データ参照可"},
+   {"m": "GET,POST", "p": "/{index}/_search", "port": 9200, "c": "high"},
+   {"m": "GET", "p": "/_cluster/health", "port": 9200, "c": "high"}
+  ]},
+  {"id": "img-kibana", "name": "Kibana / OpenSearch Dashboards", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["kibana", "kibana/kibana", "opensearchproject/opensearch-dashboards"]}, "endpoints": [
+   {"m": "GET", "p": "/app/home", "tags": ["admin"], "port": 5601, "c": "medium"},
+   {"m": "GET", "p": "/api/status", "port": 5601, "c": "medium"}
+  ]},
+  {"id": "img-grafana", "name": "Grafana", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["grafana/grafana", "grafana/grafana-oss", "grafana/grafana-enterprise"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/login", "tags": ["admin", "auth-flow"], "port": 3000, "c": "high", "note": "admin/admin の既定資格情報と匿名アクセス設定を確認"},
+   {"m": "GET", "p": "/api/health", "port": 3000, "c": "high"},
+   {"m": "GET", "p": "/api/snapshots/{key}", "port": 3000, "c": "medium"}
+  ]},
+  {"id": "img-prometheus", "name": "Prometheus", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["prom/prometheus", "bitnami/prometheus"]}, "endpoints": [
+   {"m": "GET", "p": "/api/v1/query", "tags": ["debug"], "port": 9090, "c": "high", "note": "認証機構なし。公開されていると内部構成が全て見える"},
+   {"m": "GET", "p": "/api/v1/targets", "tags": ["debug"], "port": 9090, "c": "high"},
+   {"m": "GET", "p": "/graph", "tags": ["debug"], "port": 9090, "c": "high"}
+  ]},
+  {"id": "img-jenkins", "name": "Jenkins", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["jenkins/jenkins", "jenkins"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/login", "tags": ["admin", "auth-flow"], "port": 8080, "c": "high"},
+   {"m": "GET,POST", "p": "/script", "tags": ["admin"], "port": 8080, "c": "high", "note": "Groovy スクリプトコンソール（= RCE）"},
+   {"m": "GET", "p": "/api/json", "port": 8080, "c": "high"}
+  ]},
+  {"id": "img-mailcatcher", "name": "MailHog / Mailpit", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["mailhog/mailhog", "axllent/mailpit", "sj26/mailcatcher", "schickling/mailcatcher"]}, "endpoints": [
+   {"m": "GET", "p": "/", "tags": ["debug"], "port": 8025, "c": "high", "note": "開発用メール受信箱。検証環境で公開されているとパスワードリセットメール等が読める"},
+   {"m": "GET", "p": "/api/v2/messages", "tags": ["debug"], "port": 8025, "c": "medium"},
+   {"m": "SMTP", "p": "(SMTP 受信)", "proto": "smtp", "port": 1025, "tags": ["debug"], "c": "high", "note": "認証なしでメールを受け付ける。ポートが公開されていれば任意のメールを受信箱に入れられる"},
+   {"m": "GET", "p": "/api/v2/search", "tags": ["debug"], "port": 8025, "c": "medium"},
+   {"m": "DELETE", "p": "/api/v1/messages", "tags": ["debug", "state-changing"], "port": 8025, "c": "medium", "note": "全メールの削除"},
+   {"m": "DELETE", "p": "/api/v1/messages/{id}", "tags": ["debug", "state-changing"], "port": 8025, "c": "medium"},
+   {"m": "POST", "p": "/api/v1/messages/{id}/release", "tags": ["debug", "state-changing", "url-input"], "port": 8025, "c": "medium", "note": "受信したメールを指定の SMTP サーバへ再送する。宛先サーバを指定できるなら中継に使える"},
+   {"m": "GET", "p": "/api/v2/websocket", "proto": "websocket", "tags": ["debug"], "port": 8025, "c": "medium"}
+  ]},
+  {"id": "img-db-admin", "name": "DB 管理ツール (Adminer / phpMyAdmin / pgAdmin / mongo-express / redis-commander)", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["adminer", "phpmyadmin", "phpmyadmin/phpmyadmin", "dpage/pgadmin4", "mongo-express", "rediscommander/redis-commander", "redislabs/redisinsight", "sosedoff/pgweb", "cloudbeaver", "dbeaver/cloudbeaver"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/", "tags": ["admin"], "c": "high", "note": "DB 管理 UI。検証・本番環境に残っていないか、公開ポートを確認"}
+  ]},
+  {"id": "img-swagger-ui", "name": "Swagger UI / Redoc コンテナ", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["swaggerapi/swagger-ui", "swaggerapi/swagger-editor", "redocly/redoc"]}, "endpoints": [
+   {"m": "GET", "p": "/", "tags": ["debug"], "port": 8080, "c": "high", "note": "API 定義の公開 UI"}
+  ]},
+  {"id": "img-traefik", "name": "Traefik", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["traefik"]}, "endpoints": [
+   {"m": "GET", "p": "/dashboard/", "tags": ["admin"], "port": 8080, "c": "medium", "note": "--api.insecure=true のとき無認証で公開"},
+   {"m": "GET", "p": "/api/rawdata", "tags": ["admin"], "port": 8080, "c": "medium", "note": "全ルータ・サービス定義"}
+  ]},
+  {"id": "img-portainer", "name": "Portainer", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["portainer/portainer-ce", "portainer/portainer", "portainer/portainer-ee"]}, "endpoints": [
+   {"m": "GET", "p": "/", "tags": ["admin"], "port": 9000, "c": "high", "note": "Docker 管理 UI（= ホスト権限）"}
+  ]},
+  {"id": "img-consul", "name": "Consul", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["consul", "hashicorp/consul"]}, "endpoints": [
+   {"m": "GET", "p": "/v1/agent/self", "tags": ["admin"], "port": 8500, "c": "high"},
+   {"m": "GET", "p": "/v1/kv/{key*}", "tags": ["admin"], "port": 8500, "c": "high", "note": "ACL 未設定なら KV（設定・秘密情報）が読める"},
+   {"m": "GET", "p": "/ui/", "tags": ["admin"], "port": 8500, "c": "high"}
+  ]},
+  {"id": "img-vault", "name": "Vault", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["vault", "hashicorp/vault"]}, "endpoints": [
+   {"m": "GET", "p": "/v1/sys/health", "port": 8200, "c": "high"},
+   {"m": "GET", "p": "/ui/", "tags": ["admin"], "port": 8200, "c": "high"}
+  ]},
+  {"id": "img-registry", "name": "Docker Registry", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["registry"]}, "endpoints": [
+   {"m": "GET", "p": "/v2/_catalog", "port": 5000, "c": "high", "note": "無認証ならイメージ一覧と中身（ソース・秘密情報）が取得できる"}
+  ]},
+  {"id": "img-jupyter", "name": "Jupyter", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["jupyter/*", "jupyterhub/jupyterhub"], "pypi": ["notebook", "jupyterlab"]}, "endpoints": [
+   {"m": "GET", "p": "/tree", "tags": ["admin"], "port": 8888, "c": "medium", "note": "トークン/パスワード無効化されていると任意コード実行"},
+   {"m": "GET,POST", "p": "/api/kernels", "tags": ["admin"], "port": 8888, "c": "medium"}
+  ]},
+  {"id": "img-flower", "name": "Celery Flower", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["mher/flower"], "pypi": ["flower"]}, "endpoints": [
+   {"m": "GET", "p": "/api/workers", "tags": ["admin"], "port": 5555, "c": "medium", "note": "既定で認証なし。タスク引数の閲覧・タスク実行が可能"},
+   {"m": "POST", "p": "/api/task/async-apply/{task}", "tags": ["admin"], "port": 5555, "c": "medium"}
+  ]},
+  {"id": "img-airflow", "name": "Apache Airflow", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["apache/airflow"], "pypi": ["apache-airflow"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/login/", "tags": ["admin", "auth-flow"], "port": 8080, "c": "medium"},
+   {"m": "GET", "p": "/api/v1/dags", "tags": ["admin"], "port": 8080, "c": "medium"}
+  ]},
+  {"id": "img-n8n", "name": "n8n", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["n8nio/n8n"]}, "endpoints": [
+   {"m": "ANY", "p": "/webhook/{path*}", "tags": ["webhook"], "port": 5678, "c": "high", "note": "ワークフローの Webhook。認証は各ワークフロー任せ"},
+   {"m": "ANY", "p": "/webhook-test/{path*}", "tags": ["webhook", "debug"], "port": 5678, "c": "medium"},
+   {"m": "ANY", "p": "/rest/{path*}", "tags": ["admin"], "port": 5678, "c": "high"}
+  ]},
+  {"id": "img-directus", "name": "Directus", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["directus/directus"], "npm": ["directus"]}, "endpoints": [
+   {"m": "GET,POST", "p": "/items/{collection}", "port": 8055, "c": "high", "note": "Public ロールの権限を確認"},
+   {"m": "GET,PATCH,DELETE", "p": "/items/{collection}/{id}", "port": 8055, "c": "high"},
+   {"m": "POST", "p": "/auth/login", "tags": ["auth-flow"], "port": 8055, "c": "high"},
+   {"m": "GET", "p": "/assets/{id}", "tags": ["file-access"], "port": 8055, "c": "high"},
+   {"m": "POST", "p": "/files", "tags": ["upload"], "port": 8055, "c": "high"},
+   {"m": "GET,POST", "p": "/graphql", "proto": "graphql", "port": 8055, "c": "high"},
+   {"m": "GET", "p": "/server/info", "port": 8055, "c": "high"},
+   {"m": "GET", "p": "/admin", "tags": ["admin"], "port": 8055, "c": "high"}
+  ]},
+  {"id": "img-metabase", "name": "Metabase", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["metabase/metabase"]}, "endpoints": [
+   {"m": "POST", "p": "/api/session", "tags": ["auth-flow", "admin"], "port": 3000, "c": "high"},
+   {"m": "GET", "p": "/api/session/properties", "port": 3000, "c": "high", "note": "無認証で設定情報が取れる（過去に setup-token 漏えい → RCE: CVE-2023-38646）"},
+   {"m": "GET", "p": "/public/question/{uuid}", "port": 3000, "c": "medium"}
+  ]},
+  {"id": "img-selenium", "name": "Selenium Grid", "section": "コンテナイメージ（ミドルウェア・管理コンソール）", "when": {"docker": ["selenium/*", "browserless/chrome"]}, "endpoints": [
+   {"m": "ANY", "p": "/wd/hub/session", "tags": ["admin"], "port": 4444, "c": "high", "note": "無認証でブラウザを操作できる（= 内部ネットワークへの SSRF・ファイル読み取り）"}
+  ]},
+  {"id": "django-admin", "name": "Django 管理サイト", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "*.py", "regex": "admin\\.site\\.urls"}]}, "endpoints": [
+   {"m": "GET", "p": "{admin}/", "tags": ["admin"], "c": "high", "note": "{admin} は admin.site.urls を組み込んだ接頭辞。login 以外は is_staff が必要。公開範囲と管理者アカウントの強度を確認"},
+   {"m": "GET,POST", "p": "{admin}/login/", "tags": ["admin", "auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "{admin}/logout/", "tags": ["admin", "auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "{admin}/password_change/", "tags": ["admin", "auth-flow"], "c": "high"},
+   {"m": "GET", "p": "{admin}/jsi18n/", "tags": ["admin"], "c": "high"},
+   {"m": "GET", "p": "{admin}/autocomplete/", "tags": ["admin"], "c": "high"},
+   {"m": "GET", "p": "{admin}/r/{content_type_id}/{object_id}/", "tags": ["admin"], "c": "high", "note": "「サイト上で表示」のリダイレクタ"},
+   {"m": "GET,POST", "p": "{admin}/{app}/{model}/", "tags": ["admin"], "c": "high", "note": "登録されたモデルごとに具体化する（admin.site.register / @admin.register を読む）。POST は一括アクション"},
+   {"m": "GET,POST", "p": "{admin}/{app}/{model}/add/", "tags": ["admin"], "c": "high"},
+   {"m": "GET,POST", "p": "{admin}/{app}/{model}/{object_id}/change/", "tags": ["admin"], "c": "high"},
+   {"m": "GET,POST", "p": "{admin}/{app}/{model}/{object_id}/delete/", "tags": ["admin"], "c": "high"},
+   {"m": "GET", "p": "{admin}/{app}/{model}/{object_id}/history/", "tags": ["admin"], "c": "high"}
+  ]},
+  {"id": "django-auth-urls", "name": "Django 標準の認証画面 (django.contrib.auth.urls)", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "*.py", "regex": "django\\.contrib\\.auth\\.urls"}]}, "endpoints": [
+   {"m": "GET,POST", "p": "{mount}/login/", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "{mount}/logout/", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "{mount}/password_change/", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET", "p": "{mount}/password_change/done/", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "{mount}/password_reset/", "tags": ["auth-flow"], "c": "high", "note": "無認証でメールを送らせる口。送り先のメール基盤も確認"},
+   {"m": "GET", "p": "{mount}/password_reset/done/", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "{mount}/reset/{uidb64}/{token}/", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET", "p": "{mount}/reset/done/", "tags": ["auth-flow"], "c": "high"}
+  ]},
+  {"id": "drf-router", "name": "Django REST framework の Router", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "*.py", "regex": "(DefaultRouter|SimpleRouter)\\("}]}, "endpoints": [
+   {"m": "GET", "p": "{router}/", "c": "medium", "note": "DefaultRouter のときだけ生える API ルート。登録済みエンドポイントの一覧を返す"},
+   {"m": "GET,POST", "p": "{router}/{prefix}/", "c": "high", "note": "register した ViewSet ごとに具体化する。実際に生える操作は継承元（ModelViewSet / ReadOnlyModelViewSet / 各 mixin）で決まる"},
+   {"m": "GET,PUT,PATCH,DELETE", "p": "{router}/{prefix}/{pk}/", "c": "high", "note": "lookup_field が指定されていればその名前"},
+   {"m": "ANY", "p": "{router}/{prefix}/{action}/", "c": "high", "note": "ViewSet の @action(detail=False) ごと。urls.py には現れない。methods と permission_classes を読む"},
+   {"m": "ANY", "p": "{router}/{prefix}/{pk}/{action}/", "c": "high", "note": "ViewSet の @action(detail=True) ごと"},
+   {"m": "GET", "p": "{router}/{prefix}.{format}", "c": "low", "note": "DefaultRouter は書式サフィックス付きの別名も受ける。別名は別件にせず備考に書く"}
+  ]},
+  {"id": "drf-login", "name": "DRF のログイン画面 (rest_framework.urls)", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "*.py", "regex": "rest_framework\\.urls"}]}, "endpoints": [
+   {"m": "GET,POST", "p": "{mount}/login/", "tags": ["auth-flow"], "c": "high"},
+   {"m": "GET,POST", "p": "{mount}/logout/", "tags": ["auth-flow"], "c": "high"}
+  ]},
+  {"id": "django-debug-pages", "name": "Django の DEBUG=True", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "settings*.py|*/settings/*.py", "regex": "^DEBUG\\s*=\\s*True"}]}, "endpoints": [
+   {"m": "ANY", "p": "/{存在しないパス}", "tags": ["debug"], "c": "high", "note": "404 の技術情報ページに URL パターンの一覧が出る。例外時は設定値とスタックトレースが出る。存在しないパスを 1 回叩けば有効かどうか分かる"},
+   {"m": "GET", "p": "{STATIC_URL}{path*}", "tags": ["static", "debug"], "c": "medium", "note": "開発サーバでは静的ファイルが自動配信される"}
+  ]},
+  {"id": "swagger-ui-express-assets", "name": "swagger-ui-express", "section": "追補: 組み込み方で場所が決まるもの", "when": {"npm": ["swagger-ui-express"]}, "endpoints": [
+   {"m": "GET", "p": "{mount}/", "tags": ["api-docs"], "c": "high", "note": "{mount} は app.use で組み込んだパス"},
+   {"m": "GET", "p": "{mount}/swagger-ui-init.js", "tags": ["api-docs"], "c": "high", "note": "API 定義がこの JS に埋め込まれる。UI が見えなくても定義は取れる"},
+   {"m": "GET", "p": "{mount}/{asset}", "tags": ["api-docs", "static"], "c": "high"}
+  ]},
+  {"id": "trpc-http", "name": "tRPC の HTTP 受け口", "section": "追補: 組み込み方で場所が決まるもの", "when": {"npm": ["@trpc/server"]}, "endpoints": [
+   {"m": "GET", "p": "{mount}/{procedure}", "c": "high", "note": "query の呼び出し。入力は ?input= の JSON。procedure は ルーター.手続き の形"},
+   {"m": "POST", "p": "{mount}/{procedure}", "c": "high", "note": "mutation の呼び出し"},
+   {"m": "GET,POST", "p": "{mount}/{procedure1},{procedure2}?batch=1", "c": "medium", "note": "バッチ呼び出し。1 リクエストで複数の手続きを呼べる"}
+  ]},
+  {"id": "node-inspector", "name": "Node.js インスペクタ", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "dockerfile*|package.json|docker-compose*.yml|docker-compose*.yaml|compose*.yml|compose*.yaml|procfile|*.sh", "regex": "--inspect|9229"}]}, "endpoints": [
+   {"m": "GET", "p": "/json/list", "tags": ["debug"], "port": 9229, "c": "low", "note": "デバッグ対象の一覧。--inspect 付きで起動し、ポートが外に出ていれば無認証で届く"},
+   {"m": "GET", "p": "/json/version", "tags": ["debug"], "port": 9229, "c": "low"},
+   {"m": "GET", "p": "/{target-id}", "proto": "ws", "tags": ["debug"], "port": 9229, "c": "low", "note": "デバッガの WebSocket。接続できれば任意コード実行"}
+  ]},
+  {"id": "express-defaults", "name": "Express の既定の動作", "section": "追補: 組み込み方で場所が決まるもの", "when": {"npm": ["express"]}, "endpoints": [
+   {"m": "ANY", "p": "/{path*}", "tags": ["debug"], "c": "high", "note": "どのルートにも当たらないパスと、ハンドラが投げた例外は、既定のハンドラ（finalhandler）が応答する。NODE_ENV が production でないとスタックトレースを本文に返す。独自のエラーハンドラの有無と NODE_ENV の設定を確認"},
+   {"m": "HEAD", "p": "/{GET のあるパス}", "c": "high", "note": "GET のルートは HEAD にも応答する。OPTIONS も既定で応答する（メソッド単位のガードを書いている場合の抜け）"}
+  ]},
+  {"id": "nginx-stub-status", "name": "nginx の状態表示・既定の配信", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "*.conf|nginx*|*.conf.template|*.vhost", "regex": "stub_status|autoindex\\s+on"}]}, "endpoints": [
+   {"m": "GET", "p": "/{stub_status の location}", "tags": ["debug", "internal"], "c": "high", "note": "接続数などの状態表示。allow / deny で絞られているか"},
+   {"m": "GET", "p": "/{autoindex の location}/", "tags": ["static"], "c": "high", "note": "autoindex on の場所はディレクトリ一覧を返す"}
+  ]}
+ ]
+}

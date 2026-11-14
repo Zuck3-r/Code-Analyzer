@@ -1,0 +1,9 @@
+# 預かったソースと調査結果はコミットしない
+/Input/*
+!/Input/.gitkeep
+/Output/*
+!/Output/.gitkeep
+
+__pycache__/
+*.pyc
+.pytest_cache/
