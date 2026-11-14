@@ -93,7 +93,7 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 | 項目 | 内容 |
 |---|---|
 | `name` | 項目名。入れ子は `address.zip`、配列は `items[].sku`。本文を丸ごと渡している（一括代入・そのまま保存・そのまま転送）ときは `*` を 1 件足す |
-| `in` | `path` `query` `body` `form` `header` `cookie` `file` |
+| `in` | `path` `query` `body` `form` `header` `cookie` `file`。HTTP 以外の入口では `arg`（コマンドの引数）`env`（環境変数）`stdin`（標準入力）`message`（メッセージやメールの本文・項目）`command`（プロトコルのコマンドの引数） |
 | `required` | `true` / `false`。**コードから分からなければ書かない**（一覧では `?` が付く。推測で `true` にしない） |
 | `type` | 分かれば（`string` `int` `bool` `object` `array` `file` `enum(a\|b)`）。検証スキーマ・型定義・変換処理から読む |
 | `source` | どこから読んだか。`schema`（検証スキーマ・DTO・シリアライザ・型定義）`code`（ハンドラが読んでいる）`spec`（OpenAPI 等）`client`（呼ぶ側が送っている）`implicit`（フレームワークが受け取る） |
@@ -141,13 +141,22 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 | クラウドのリソース | `cloud` | 空 | `種類:名前` | `bucket:uploads-prod` |
 | 管理コマンド | `cli` | 空 | コマンド名 | `manage.py loaddata` |
 | 資格情報の所在 | `other` | 空 | `secret:変数名や種類`（値は書かない） | `secret:DATABASE_URL` |
+| 独自プロトコルのコマンド（SMTP、IMAP、独自の TCP プロトコルなど） | `protocol` | プロトコル名（`SMTP`） | `プロトコル名:コマンド`。受け付けるポートは別に `port` で書く | `smtp:RCPT TO`、`smtp:AUTH PLAIN` |
+| このコードが呼び出す外部の宛先 | `other` | 空 | `outbound:宛先の役割`（宛先が入力で決まるものは、解釈点 `url:` にも書く） | `outbound:webhook-delivery`、`outbound:dns-resolver` |
+| 外部から届くデータの取り込み（受信メール、外部 API の応答、ファイルの監視） | `event` | 空 | `inbound:種類` | `inbound:bounce-mail`、`inbound:dns-response` |
+| 設定の読み込み口（外から変えられる設定） | `other` | 空 | `config:読み込み元` | `config:env+postal.yml` |
 | 受け口 | `input-channel` | 空 | `種類:仕組み` | `body:json+urlencoded(extended)`、`header:X-Forwarded-*`、`cookie:session(marshal)`、`rsc:server-functions` |
 | 解釈点 | `parser` | 空 | `種類:部品@場所` | `xml:xml2js@routes/import.js`、`deserialize:yaml.load@tasks.py` |
 
 - 同じパスが複数のホストで別の意味を持つとき（本番と検証で転送先や制限が違う、など）は、ホストごとに別の項目にして `host` を書き分け、
   **根拠の 1 件目をそのホストの定義の行**（それぞれの server ブロックの行）にする。`host` が違い、根拠の位置も違えば別件として扱われる。
   1 つの定義が複数のホストで公開されているだけなら 1 件でよい（`host` は空のままか代表の 1 つ。ほかのホストは `notes` に）
+- **同じソースの中に HTTP サーバーが複数ある**とき（本体のほかにヘルスチェック用・管理用のサーバーがある、ヘッダーで動作が切り替わる別モードがある）は、
+  本体以外の項目の `host` に `役割名:ポート` を書いて分ける（`health:9090`、`tracking:5000`）。書かないと、`/` や `/{path*}` が本体の同じパスと 1 件に統合される
 - タグは下の語彙にあるものを優先する（似た意味の新語を作ると集計が割れる）
+- 解釈点の `fed_by` は、**届く入口の `method` と `path` を、その入口の項目と同じ書き方で**書く（`POST /api/v1/send/message`、`smtp:DATA`、`thumbnails`）。
+  説明を足さない（「〜のルート（担当外）」のように書くと結べない）。同じ書き方なら統合時に入口へ自動で結ばれ、入口の `reaches` も埋まる。
+  入口が特定できないときは `["不明"]` と `REACH_UNKNOWN`
 
 ### 受け口か解釈点か（同じ仕組みを両方に書かない）
 
@@ -256,6 +265,7 @@ URL・ポート・イベント名を持つものはまず「入口」に書き�
 | `UNINTENDED_INTAKE` | 開発者のコードが読んでいないのに、基盤（フレームワーク・ミドルウェア・ライブラリ・サーバ）が受け取り、処理に使っている入力 | 受け口と、フレームワーク独自の通信経路に付ける。「設定した覚えが無いのに既定で有効」も含む |
 | `SECOND_ORDER` | 受け取った場所とは別の場所・別の時点で解釈される | 保存後のジョブ、別ソースによる読み取り、管理画面での表示、外部サービス経由の値 |
 | `REACH_UNKNOWN` | 解釈処理はあるが、外部の値が届く経路を確定できていない | 外さずに残す。何を調べれば確定するかを `notes` に書く |
+| `CONFIG_GATED` | 設定で有効にしたときだけ動く本番機能（既定では無効。OIDC 連携、PROXY protocol、外部の検査サービスなど） | 有効にする設定名を `notes` に書く。開発用・デバッグ用の切り替えは `DEV_ONLY` |
 | `PRE_AUTH` | 認証・認可より前に動く受け口・解釈点 | 誰でも到達できるので、優先度は高くする |
 | `AUTH_CONFLICT` | 認証の判断が担当者の間で食い違った（統合時に自動で付く） | 根拠を読み直して決め、`overrides.jsonl` で `auth` を確定してフラグを外す |
 
@@ -267,6 +277,7 @@ URL・ポート・イベント名を持つものはまず「入口」に書き�
 `path-input`（ファイル名・パスを受け取る） `object-ref`（ID 指定で他人のデータを指せる形） `state-changing` `webhook` `payment` `pii`
 `mass-assignment`（権限や金額などの属性を受け取る） `proxy` `mounted`（配下を列挙できないマウント） `csrf-exempt` `cors-any`
 `auth-noop`（ガードはあるが何も確かめていない） `ip-restricted`（送信元 IP の制限のみ）
+`dead-route`（ルートは定義されているが、対応するハンドラが無い。認証欄は `unknown`、実際の応答は未確認と `notes` に） `no-input`（値を何も読まない、操作だけの口）
 `public-port` `sensitive-port` `non-prod`（検証・開発用ホスト） `embedded-credentials`（資格情報の埋め込み。値は書かない） `in-test` `deprecated`
 
 受け口・解釈点でよく使うもの:

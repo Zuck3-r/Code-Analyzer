@@ -103,7 +103,7 @@ PARSER_HINTS: list[tuple[str, re.Pattern]] = [
     )),
     ("画像・動画・文書の解析や変換", re.compile(
         r"""\bMiniMagick\b|\bRMagick\b|\bMagick::\w+|\bImagick\b|\bsharp\s*\(|\bImage\.open\s*\(|\bImageIO\.read\b|\bimagecreatefrom\w+|\bgetimagesize\b|\bexif_read_data\b|\bImage\.Load\w*\(|\bimage\.Decode\w*\(|"""
-        r"""\b(?:ffmpeg|ffprobe|exiftool|ghostscript|libreoffice|soffice|wkhtmltopdf|pdftotext|pdftoppm|tesseract|unoconv|mutool|identify|mogrify)\b|\bpuppeteer\.launch\b|\bchromium\.launch\b|\bpage\.(?:goto|setContent|pdf|screenshot)\s*\(|"""
+        r"""\b(?:ffmpeg|ffprobe|exiftool|ghostscript|libreoffice|soffice|wkhtmltopdf|pdftotext|pdftoppm|tesseract|unoconv|mutool|mogrify)\b|\bpuppeteer\.launch\b|\bchromium\.launch\b|\bpage\.(?:goto|setContent|pdf|screenshot)\s*\(|"""
         r"""\bPdfReader\b|\bPDDocument\b|\bPDFParser\b|\bload_workbook\b|\bXSSFWorkbook\b|\bWorkbookFactory\b|\bPhpSpreadsheet\b|\bIOFactory::load\b|\bDocument\s*\(\s*\w+\s*\)\s*#?\s*docx"""
     )),
     ("アーカイブの展開", re.compile(
@@ -883,12 +883,13 @@ def main() -> int:
         # 本文を受けるはずの入口で、パス変数以外のパラメータが 1 つも書かれていないもの
         no_params = [r for r in all_rows if str(r.get("kind", "")).lower() in ("http", "rpc", "graphql") and str(r.get("origin", "")).lower() in ("code", "spec")
                      and str(r.get("method", "")).upper() in ("POST", "PUT", "PATCH", "MUTATION")
+                     and "no-input" not in as_list(r.get("tags")) and "dead-route" not in as_list(r.get("tags"))
                      and not any(isinstance(p, dict) and p.get("in") != "path" for p in as_list(r.get("params")))]
         summary["writes_without_params"] = len(no_params)
         if no_params:
             md += [f"### 値を受け取るはずなのに、パラメータが書かれていない入口: {len(no_params)} 件", "",
                    "POST / PUT / PATCH / MUTATION で、パス変数以外のパラメータが 1 つも無い。ハンドラを開き、読んでいる項目（本文・クエリ・ヘッダ・Cookie・ファイル）を `overrides.jsonl` の `set.params` で足す。"
-                   "本当に何も読まないなら、`notes` にそう書く。", ""]
+                   "ハンドラを読んで、本当に何も読まない（操作だけの口）と確かめたら、タグ `no-input` を付ける（ここから消える）。", ""]
             md += [f"- {r.get('source', '')} `{r.get('method', '')} {r.get('path', '')}`" for r in no_params[:60]] + [""]
         if not (no_intake or no_fed or no_scope):
             md += ["欠けは無い。", ""]

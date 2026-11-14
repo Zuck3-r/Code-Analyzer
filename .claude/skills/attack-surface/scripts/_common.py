@@ -111,6 +111,7 @@ KIND_GROUP = {
     "graphql": "graphql", "grpc": "rpc", "rpc": "rpc",
     "port": "port", "cloud": "cloud", "host": "host",
     "event": "event", "job": "event", "queue": "event", "cron": "event",
+    "protocol": "protocol",
 }
 ANCHOR_KINDS = {"input-channel", "parser"}
 LAYER_OF = {"input-channel": "受け口", "parser": "解釈点"}
@@ -432,6 +433,7 @@ def prepare(r: dict) -> dict:
             if name not in have:
                 have.add(name)
                 r["params"].append({"name": name, "in": "path", "required": True})
+    r["_first_files"] = [first_evidence(r)[0]] if first_evidence(r)[0] else []
     r.setdefault("_spellings", [])
     r["_spellings"] = [f"{r['kind']} {r['method']} {r.get('path', '')}".replace("  ", " ").strip()]
     return r
@@ -467,6 +469,9 @@ def absorb(cur: dict, r: dict) -> None:
     fb = [x for x in str(cur.get("found_by", "")).split("+") if x]
     fb += [x for x in str(r.get("found_by", "")).split("+") if x and x not in fb]
     cur["found_by"] = "+".join(fb)
+    for ff in r.get("_first_files", []):
+        if ff not in cur.setdefault("_first_files", []):
+            cur["_first_files"].append(ff)
     for s in r.get("_spellings", []):
         if s not in cur.setdefault("_spellings", []):
             cur["_spellings"].append(s)

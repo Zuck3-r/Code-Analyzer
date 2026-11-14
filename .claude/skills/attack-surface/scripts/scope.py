@@ -27,7 +27,8 @@ from _common import load_jsonl, read_text, resolve  # noqa: E402
 # 区分 → (ティア, 一覧に出す説明)
 CATEGORIES = {
     "binary": ("D", "バイナリ（画像・フォント・圧縮物・実行形式・文書）"),
-    "lock": ("D", "ロックファイル（依存の固定。依存名とバージョンは依存定義から読む）"),
+    "lock": ("D", "ロックファイル（通読しない。依存定義に版が書かれていない部品の版は、ここを検索して引く。knowledge.md の版はここからも補ってある）"),
+    "secret": ("C", "鍵・証明書（中身を書き写さない。種類と所在だけを記録する）"),
     "translation": ("D", "翻訳・文言の定義（言語ごとの同形のファイル群）"),
     "fixture": ("D", "テスト用のデータ（サンプルの HTML・XML・JSON・メールなど）"),
     "snapshot": ("D", "スナップショット・静的解析の基準ファイル"),
@@ -67,6 +68,9 @@ VENDOR_DIRS = {"vendor", "vendors", "third_party", "third-party", "thirdparty", 
 MIGRATION_DIRS = {"migrations", "migration", "migrate"}
 HISTORY_NAME = re.compile(r"(?i)^(changelog|changes|history|news|release[-_ ]?notes?|licen[sc]e|copying|notice|authors|contributors|code[-_ ]of[-_ ]conduct|patents|credits|thanks)(\b|[._\-])")
 BASELINE_NAME = re.compile(r"(?i)baseline[^/]*\.(txt|json|xml|neon|ya?ml)$|\.snap$")
+SECRET_EXT = {".key", ".pem", ".crt", ".cer", ".ppk", ".asc", ".gpg", ".pub", ".jwk", ".keys"}
+SECRET_NAME = re.compile(r"(?i)^(id_(rsa|dsa|ecdsa|ed25519)|.*private[-_.]?key.*|.*\.keystore)$")
+SECRET_SHAPE = re.compile(r"-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----|(?i:private[_-]?key\s*[:=]\s*[\"'|>-])")
 SCAN_MAX = 4_000_000
 
 
@@ -78,6 +82,8 @@ def _propose(rel: str, f: dict, lang_groups: set[str]) -> str:
     ext = f["ext"]
     if not f.get("text"):
         return "binary"
+    if ext in SECRET_EXT or SECRET_NAME.match(name):
+        return "secret"
     if KEEP.search(low):
         return ""
     if name in LOCK_NAMES or ext == ".lock":
@@ -145,6 +151,9 @@ def _has_marks(path: Path, ext: str, hints: list, infra: list, parser_hints: lis
     except OSError:
         return []
     found: list[tuple[int, str]] = []
+    for n, line in enumerate(lines, 1):
+        if len(line) <= 600 and SECRET_SHAPE.search(line):
+            return [(n, "鍵・証明書の形をした行")]
     if ext in CODE_EXT:
         for n, line in enumerate(lines, 1):
             if 8 <= len(line) <= 600:
@@ -240,9 +249,10 @@ def triage(inv: dict, overrides: list[dict] | None = None) -> dict:
     return {"promoted": promoted, "override_hits": applied, "overrides": overrides or []}
 
 
-def load_overrides(work: Path) -> list[dict]:
+def load_overrides(work: Path) -> tuple[list[dict], list[str]]:
+    """(scope.jsonl の行, 読めなかった行の説明)"""
     p = work / "scope.jsonl"
-    return load_jsonl(p)[0] if p.exists() else []
+    return load_jsonl(p) if p.exists() else ([], [])
 
 
 def write_scope(work: Path, inv: dict, result: dict) -> Path:

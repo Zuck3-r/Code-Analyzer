@@ -79,6 +79,35 @@ def dep_patterns(eco: str, name: str) -> list[re.Pattern]:
     return [re.compile(p) for p in pats]
 
 
+LOCK_FILES = {
+    "gem": ("gemfile.lock",), "npm": ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json"), "composer": ("composer.lock",),
+    "pypi": ("poetry.lock", "uv.lock", "pipfile.lock"), "cargo": ("cargo.lock",), "go": ("go.sum",), "pub": ("pubspec.lock",), "hex": ("mix.lock",),
+}
+
+
+def lock_version(eco: str, name: str, text: str) -> str:
+    """ロックファイルの文面から、部品の固定された版を探す。見つからなければ空。"""
+    n = re.escape(name.rstrip("*"))
+    pats = {
+        "gem": [rf"(?m)^ {{4}}{n} \(([^)\s]+)\)"],
+        "npm": [rf'"node_modules/{n}"\s*:\s*\{{\s*"version"\s*:\s*"([^"]+)"', rf'(?m)^"?{n}@[^\n]*:\n\s+version:?\s+"?([^"\s]+)"?', rf"(?m)^\s+'?/?{n}@(\d[^'\s:(]*)"],
+        "composer": [rf'"name"\s*:\s*"{n}"\s*,\s*"version"\s*:\s*"([^"]+)"'],
+        "pypi": [rf'(?im)^name\s*=\s*"{n}"\s*\nversion\s*=\s*"([^"]+)"', rf'(?i)"{n}"\s*:\s*\{{[^{{}}]*?"version"\s*:\s*"==([^"]+)"'],
+        "cargo": [rf'(?m)^name\s*=\s*"{n}"\s*\nversion\s*=\s*"([^"]+)"'],
+        "go": [rf"(?m)^{n}(?:/[\w.\-/]+)? (v[\w.\-+]+)"],
+        "pub": [rf"(?m)^  {n}:\n(?:    .*\n)*?    version: \"([^\"]+)\""],
+        "hex": [rf'"{n}": \{{:hex, :\w+, "([^"]+)"'],
+    }.get(eco, [])
+    for p in pats:
+        try:
+            m = re.search(p, text)
+        except re.error:
+            continue
+        if m:
+            return m.group(1)[:30]
+    return ""
+
+
 def docker_pattern(name: str) -> re.Pattern:
     n = _name_rx(name, r"[\w.\-]*")
     return re.compile(
@@ -117,13 +146,19 @@ def scan(inventory: dict) -> dict:
     """
     entries, comps = load_kb()
     base = inventory["base_dir"]
-    per_source: dict[str, dict] = defaultdict(lambda: {"manifests": defaultdict(list), "docker": [], "files": []})
+    per_source: dict[str, dict] = defaultdict(lambda: {"manifests": defaultdict(list), "docker": [], "files": [], "locks": defaultdict(list)})
     for f in inventory["files"]:
         c = per_source[f["source"]]
         c["files"].append(f)
         if not f.get("text") or f["size"] > 2_000_000:
             continue
         name = f["path"].rsplit("/", 1)[-1].lower()
+        for eco, names in LOCK_FILES.items():
+            if name in names and f["size"] < 30_000_000:
+                try:
+                    c["locks"][eco].append(read_text(resolve(base, f["path"])))
+                except OSError:
+                    pass
         is_manifest = [eco for eco, test in ECO_FILES.items() if test(name)]
         is_docker = bool(_DOCKERISH.search(name)) and f["size"] < 500_000
         if not (is_manifest or is_docker):
@@ -176,7 +211,10 @@ def scan(inventory: dict) -> dict:
                             m = rx.search(text)
                             if m:
                                 ver = (m.group(1) or "").strip() if m.groups() else ""
-                                hits.append((str(name).rstrip("*"), path, text.count("\n", 0, m.start()) + 1, ver[:30]))
+                                locked = next((v for v in (lock_version(key, str(name), lt) for lt in c["locks"].get(key, [])) if v), "")
+                                if locked and locked not in ver:  # 依存定義に版が無い・範囲指定のときは、固定された版を添える
+                                    ver = f"{ver} → ロック {locked}".strip(" →") if ver else f"ロック {locked}"
+                                hits.append((str(name).rstrip("*"), path, text.count("\n", 0, m.start()) + 1, ver[:40]))
                                 break
             elif key == "docker":
                 for path, text in c["docker"]:

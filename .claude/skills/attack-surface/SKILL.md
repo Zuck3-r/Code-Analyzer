@@ -117,8 +117,11 @@ D のファイルもパス 2 の検索には掛かるので、検索で当たっ
 - リクエストがハンドラに届くまでに通るもの: サーバ、フレームワーク、ミドルウェアの並び（分かる範囲の見取り図。パス 2 の `intake` レンズの出発点になる）
 - ソース間の関係の仮説: どれがどれを呼ぶか、ゲートウェイやプロキシはどれか、共有している認証・DB・キュー
 - 読み方の注意: 規約ベースのルーティング、コード生成、モノレポ構成など、読み手が知らないと見落とす前提
+- **共通参照ファイル**: ルート表（`config/routes.rb`、`urls.py`、ルーターの定義）、アプリの起動・組み立てのファイルなど、どの読み手も参照してよいファイルのパス。
+  ルート表とハンドラが別のユニットに分かれると、ハンドラ側の読み手は実際のパスを書けない。ここに挙げたファイルは、担当外でも開いてよいことにする
+- 同じソースの中に HTTP サーバーが複数ある場合（ヘルスチェック用、管理用、別モード）は、それぞれの役割名とポート（`host` に書く `役割名:ポート`）
 
-次に `units.json` の分割案を確認する。1 ユニット = 1 人の読み手が集中して読み切れる量（小さいソースは 1 ユニットにまとめてある）。まとまりを壊している分割があれば
+次に `units.json` の分割案を確認する。ルート表と、そのハンドラ群の一部は、できれば同じユニットに入れる。1 ユニット = 1 人の読み手が集中して読み切れる量（小さいソースは 1 ユニットにまとめてある）。まとまりを壊している分割があれば
 `units.json` を直接書き換え、`inventory.py --refresh RUN` でユニット別一覧を作り直す（全ファイルがちょうど 1 つのユニットに入っているかも検査される）。
 ティアはスクリプトの目安にすぎない。読んで違えば読み手が判断を変える。
 
@@ -126,7 +129,14 @@ D のファイルもパス 2 の検索には掛かるので、検索で当たっ
 
 ### 2. パス 1 — ファイル起点で全部読む
 
-ユニットごとに 1 人の読み手を割り当て、[references/briefs.md](references/briefs.md) の「パス 1」の依頼文を、ユニット ID・`RUN`・`orientation.md` の要点を埋めて渡す。
+まず依頼文を作る。
+
+```bash
+python .claude/skills/attack-surface/scripts/make_briefs.py RUN
+```
+
+`RUN/work/briefs/` に、ユニットごとのパス 1 の依頼文と、規模に応じて組み分けたパス 2 の依頼文ができる（ひな形は [references/briefs.md](references/briefs.md)）。
+ユニットごとに 1 人の読み手を割り当て、「`RUN/work/briefs/pass1-<unit>.md` を読み、書かれているとおりに調査を進めてください」と伝える。依頼文の中身を自分で書き写さない。
 並列に走らせてよい。各読み手は次の 3 つを書く。
 
 - `RUN/work/pass1/<unit>.findings.jsonl` — コードに書かれている入口・受け口・解釈点（1 行 1 件。形式と記法は [references/output-format.md](references/output-format.md)）
@@ -161,7 +171,7 @@ python .claude/skills/attack-surface/scripts/check.py RUN
 ### 4. パス 2 — 観点起点で探し直す
 
 パス 1 とは逆向きに、観点（レンズ）ごとに全ソースを横断して探す。レンズの一覧と探し方は [references/hiding-places.md](references/hiding-places.md)。
-[references/briefs.md](references/briefs.md) の「パス 2」の依頼文を渡す。成果物は `RUN/work/pass2/<名前>.findings.jsonl` と `<名前>.notes.md`。
+手順 2 で作った `RUN/work/briefs/pass2-<名前>.md` を読ませる（組み分けを変えたいときは `make_briefs.py RUN --groups "entry+authz,intake,…"`）。成果物は `RUN/work/pass2/<名前>.findings.jsonl` と `<名前>.notes.md`。
 
 | レンズ | 見るもの |
 |---|---|
@@ -202,8 +212,11 @@ python .claude/skills/attack-surface/scripts/check.py RUN --diff
 
 **3 層をつなぐ。**
 
-- 解釈点ごとに: どの入口から、直接か、保存・中継を経てか、値が届くかを決める（`fed_by` `reach`）。辿り切れなければ `REACH_UNKNOWN` を付けて残す
-- 入口ごとに: その入口から届く解釈点を対応づける（`reaches`）。全ルート共通の受け口は、受け口側の `scope` で表す
+- 解釈点ごとに: どの入口から、直接か、保存・中継を経てか、値が届くかを決める（`fed_by` `reach`）。辿り切れなければ `REACH_UNKNOWN` を付けて残す。
+  `fed_by` が入口の項目と同じ書き方（`method` と `path`）になっていれば、統合のときに自動で結ばれる。`merge.md` の「解釈点と入口の結び付け」に、結べなかった書き方が件数順に出るので、
+  多いものから `overrides.jsonl` で入口の書き方に直す。1 件ずつ全部を辿る必要はない（解釈点が数百あるときは、優先度の高いものと `SECOND_ORDER` を優先する）
+- 入口ごとの `reaches` は、結ばれた `fed_by` から自動で埋まる（手で書くのは、自動で結べなかった分だけ）。全ルート共通の受け口は、受け口側の `scope` で表す
+- 設定で有効にしたときだけ動く本番機能には `CONFIG_GATED`（開発用の切り替えの `DEV_ONLY` と分ける）
 - 開発者のコードが読んでいないのに基盤が受け取る入力に `UNINTENDED_INTAKE`、認証より前に動くものに `PRE_AUTH`、保存や中継の後で解釈されるものに `SECOND_ORDER`
 
 **ソース間をつなぐ。**
@@ -244,7 +257,12 @@ python .claude/skills/attack-surface/scripts/consolidate.py RUN
 優先度が未設定の項目は、`RUN/work/check/overrides.todo.jsonl` に 1 行ずつひな形が出る（`priority` と `priority_reason` を埋めて `overrides.jsonl` に足す。
 まとまった範囲は `path_regex` や `flag` の条件 1 行で先に片付け、残りだけをひな形で埋めると早い）。
 
+`overrides.jsonl` を作り直すときは、上書き前の姿である `merged.raw.findings.jsonl` を元にする（`merged.findings.jsonl` は上書き後の姿）。
+
 `merge.md` の見方:
+
+- 「別々のファイルの定義を、同じパスとして 1 件にまとめたもの」— 同じソースに HTTP サーバーが複数あると、`/` や `/{path*}` が誤って 1 件になる。別物なら `host` に `役割名:ポート` を付けて分ける
+- 「解釈点と入口の結び付け」— 結べなかった `fed_by` の書き方。多いものから直す
 
 - 「自動で 1 件にまとめたもの」— 別の対象を巻き込んでいないかを見る
 - 「同じ箇所を根拠にしているのに別件として残ったもの」— 重複、接頭辞の違い、**同じ仕組みを受け口と解釈点の両方に書いた割れ**を疑う。
@@ -264,7 +282,8 @@ python .claude/skills/attack-surface/scripts/check.py RUN --verify
 
 そのうえで自分の目でも確かめる。
 
-- `confidence: low` の全件と、`priority: high` の全件は、根拠のファイルを開き直して読む
+- `confidence: low` の全件と、`priority: high` の項目は、根拠のファイルを開き直して読む。high が 50 件を超えるときは、同じ仕組みの束（同じコントローラ、同じ受け口、同じ部品）ごとに 2〜3 件を抜き取り、
+  どの束を何件見たかを `coverage.md` に書く
 - 公開パスの付け替えを、ソースごとに 2〜3 件、入口から辿り直して確かめる
 - 最後に自問する: **「攻撃者がこのコードを手に入れたら最初に調べる所で、この一覧に載っていないものは何か」**。思い当たれば戻って調べる
 
