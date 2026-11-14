@@ -28,6 +28,7 @@
       match … 書いた条件をすべて満たす項目が対象。値をリストにすると「いずれか」。{} は全項目
               source kind method layer(入口/受け口/解釈点) flag tag path path_regex key found_by(部分一致) host origin auth confidence priority reach file(根拠のパスの部分一致)
       操作  … set（フィールドの上書き。空文字の値は無視） add_flags remove_flags add_tags append_notes
+              replace_fed_by（{"古い書き方": "新しい書き方"}。fed_by の該当する要素だけを置き換える）
 
 使い方:
   python consolidate.py RUN            # 統合の下書きと報告（何度でも実行できる）
@@ -121,6 +122,8 @@ def main() -> int:
             flags = [f for f in as_list(it.get("flags")) if f not in as_list(ov.get("remove_flags"))]
             it["flags"] = sorted(dict.fromkeys([*flags, *map(str, as_list(ov.get("add_flags")))]))
             it["tags"] = sorted(dict.fromkeys([*map(str, as_list(it.get("tags"))), *map(str, as_list(ov.get("add_tags")))]))
+            if isinstance(ov.get("replace_fed_by"), dict):
+                it["fed_by"] = list(dict.fromkeys(str(ov["replace_fed_by"].get(str(x), x)) for x in as_list(it.get("fed_by"))))
             if ov.get("append_notes") and str(ov["append_notes"]) not in str(it.get("notes", "")):
                 it["notes"] = (str(it.get("notes", "")) + " / " + str(ov["append_notes"])).strip(" /")
 
@@ -157,8 +160,18 @@ def main() -> int:
                 fed_unmatched[s] += 1
                 continue
             fed_linked += 1
+            it["_linked"] = True
             if str(it.get("path", "")) not in map(str, as_list(hit.get("reaches"))):
                 hit["reaches"] = [*as_list(hit.get("reaches")), it.get("path", "")]
+    # 入口に結べた解釈点からは「経路が未確定」の印を外す（別の担当者が経路を書いていれば、未確定ではない）
+    reach_cleared = 0
+    for it in items:
+        if it.get("_linked") and "REACH_UNKNOWN" in as_list(it.get("flags")):
+            it["flags"] = [x for x in it["flags"] if x != "REACH_UNKNOWN"]
+            it["fed_by"] = [x for x in as_list(it.get("fed_by")) if str(x) not in ("不明", "unknown")]
+            if str(it.get("reach", "")) in ("", "unknown"):
+                it["reach"] = "indirect" if "SECOND_ORDER" in it["flags"] else "direct"
+            reach_cleared += 1
 
     # ---- 7. 書き出し
     def clean(it: dict) -> dict:
@@ -301,7 +314,8 @@ def main() -> int:
         md.append("")
 
     md += ["## 解釈点と入口の結び付け", "",
-           f"解釈点の `fed_by` のうち、入口の項目に結べたもの {fed_linked} 件（結べた入口には、`reaches` を自動で足してある）。**結べなかった書き方: {len(fed_unmatched)} 通り。**", ""]
+           f"解釈点の `fed_by` のうち、入口の項目に結べたもの {fed_linked} 件（結べた入口には、`reaches` を自動で足してある）。**結べなかった書き方: {len(fed_unmatched)} 通り。**"
+           f" 入口に結べたので `REACH_UNKNOWN` を外した解釈点: {reach_cleared} 件。", ""]
     if fed_unmatched:
         md += ["`fed_by` は、入口の項目と同じ書き方（`POST /api/x`、`server-action:名前`、キュー名など、その入口の `method` と `path`）で書くと結ばれる。"
                "結べなかったものは、`overrides.jsonl` で `fed_by` を入口の書き方に直す（多いものから）。", "",

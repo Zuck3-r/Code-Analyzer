@@ -505,9 +505,11 @@ def silent_files(inventory: dict, rows: list[dict], cov_by_file: dict[str, dict]
         judged = cov.get("surface") is False and cov.get("status") == "read"
         strong = (kinds["ルート定義らしい行"] + kinds["ルーティング用の注釈"] + kinds["インフラ上の露出"] + kinds["非 HTTP の入口"]
                   + kinds["GraphQL・RPC・WebSocket の定義"] + kinds["ファイル規約のハンドラ"])
-        score = strong * 3 + kinds["外部への呼び出し"] * 2 + kinds["URL リテラル"]
+        # DB の層（storage・repository・model など）は、クエリの発行が「外部への呼び出し」に見えるだけなので、定義らしい行があるときだけ挙げる
+        db_layer = bool(re.search(r"(?i)(^|/)(storage|store|repositor(y|ies)|dao|models?|migrations?|database|db)(/|$)", f["path"]))
+        score = strong * 3 + (0 if db_layer else kinds["外部への呼び出し"] * 2) + kinds["URL リテラル"]
         # URL が並ぶだけ（外部への呼び出しも定義らしい行も無い）のファイルと、開発補助の設定は挙げない
-        if score >= 3 and (strong or kinds["外部への呼び出し"]) and not _DEV_CONFIG.search(f["path"]):
+        if score >= 3 and (strong or (kinds["外部への呼び出し"] and not db_layer)) and not _DEV_CONFIG.search(f["path"]):
             entry_like.append({"file": f["path"], "score": score, "kinds": dict(kinds), "lines": where, "judged": judged})
         if pkinds:
             parser_like.append({"file": f["path"], "score": sum(pkinds.values()), "kinds": dict(pkinds), "lines": pwhere, "judged": judged, "test": is_test})
@@ -667,6 +669,36 @@ def main() -> int:
                 md.append(f"| … | | ほか {len(parser_lines) - args.top * 2} 行 |")
             md.append("")
 
+    # ---- leads / notes の要点（不審な記述・痕跡・非該当の判断・担当外への申し送り）を 1 つに集める
+    if not args.verify:
+        digest: list[str] = []
+        key = re.compile(r"不審|痕跡|dismissed|非該当|担当外|申し送り|確定できな|調べ切れな|未確認")
+        for d in sorted(p for p in work.iterdir() if p.is_dir() and re.fullmatch(r"pass\d+", p.name)):
+            for fpath in sorted([*d.glob("*.leads.md"), *d.glob("*.notes.md")]):
+                try:
+                    text = read_text(fpath)
+                except OSError:
+                    continue
+                keep, on, picked = [], False, 0
+                for line in text.splitlines():
+                    head = re.match(r"^\s*(#{1,6}\s|■|\*\*[^*]+\*\*\s*$)", line)
+                    if head:
+                        on = bool(key.search(line))
+                        if on:
+                            keep.append("")
+                            keep.append(line.strip())
+                        continue
+                    if (on and line.strip()) or re.match(r"^\s*[-*]?\s*dismissed\s*[:：]", line, re.I):
+                        keep.append(line.rstrip())
+                        picked += 1
+                if picked:
+                    digest += [f"## {d.name}/{fpath.name}"] + keep + [""]
+        if digest:
+            (work / "check" / "leads-digest.md").write_text(
+                "# leads / notes の要点\n\n各担当者の leads・notes のうち、見出しに「不審」「痕跡」「dismissed・非該当」「担当外・申し送り」「確定できなかった・調べ切れなかった」を含む節と、"
+                "`dismissed:` の行を機械的に集めたもの。全文は各ファイルにある。\n\n" + "\n".join(digest) + "\n", encoding="utf-8")
+        summary["leads_digest"] = sum(1 for x in digest if x.startswith("## "))
+
     # ---- 5. 知識ベースに手がかりのあるものの言及漏れ
     matched = kb.scan(inventory)
     dismissed = load_dismissed(run)
@@ -820,11 +852,15 @@ def main() -> int:
         for it in idx1.items:
             for e in it.get("evidence", []):
                 if e.get("file") and isinstance(e.get("line"), int):
-                    p1_spots[(str(it.get("source", "")).lower(), norm_file(e["file"]))].append((e["line"], squash(e.get("quote", ""))))
+                    kind = str(it.get("kind", "")).lower()
+                    p1_spots[(str(it.get("source", "")).lower(), norm_file(e["file"]), KIND_GROUP.get(kind, kind))].append((e["line"], squash(e.get("quote", ""))))
 
         def respelled(r: dict) -> bool:
+            # 同じ箇所にあるのが別の層・別の種別（たとえば解釈点）なら、書き方違いの相手ではない
             file, line, quote = first_evidence(r)
-            return bool(file) and any(same_spot(line, quote, l2, q2) for l2, q2 in p1_spots.get((str(r.get("source", "")).lower(), file), []))
+            kind = str(r.get("kind", "")).lower()
+            return bool(file) and any(same_spot(line, quote, l2, q2)
+                                      for l2, q2 in p1_spots.get((str(r.get("source", "")).lower(), file, KIND_GROUP.get(kind, kind)), []))
 
         new_entry_all = [(r, near) for r, near in new_defined if layer_of(r) == "入口"]
         respelled_entries = [(r, near) for r, near in new_entry_all if respelled(r)]

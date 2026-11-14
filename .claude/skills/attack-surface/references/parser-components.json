@@ -371,6 +371,16 @@
                           "h2non/imaginary", "clamav/clamav", "mkodockx/docker-clamav", "browserless/chrome", "browserless/chromium", "zenika/alpine-chrome", "collabora/code", "onlyoffice/documentserver",
                           "jrottenberg/ffmpeg", "linuxserver/ffmpeg", "unoconv/*", "libreoffice/*", "kkfileview/*", "plantuml/plantuml-server", "kroki/*", "mathjax/*"]},
      "keywords": ["gotenberg", "tika", "imgproxy", "thumbor", "imaginary", "clamav", "browserless", "collabora", "onlyoffice", "plantuml", "kroki", "変換サービス"],
-     "implies": "ファイルや URL を渡して変換・解析させる別コンテナ。アプリのどの入口からそこへ値が渡るか、そのコンテナのポートが外から届くか、コンテナ側が受け取る形式と取得先（URL を渡すと取りに行く型は、宛先を入力で決められる）"}
+     "implies": "ファイルや URL を渡して変換・解析させる別コンテナ。アプリのどの入口からそこへ値が渡るか、そのコンテナのポートが外から届くか、コンテナ側が受け取る形式と取得先（URL を渡すと取りに行く型は、宛先を入力で決められる）"},
+    {"id": "go-stdlib-http", "category": "リクエスト処理の共通部分（Go 標準ライブラリ）", "layer": "input-channel",
+     "match": {"code": [{"glob": "*.go", "regex": "\"net/http\""}]},
+     "keywords": ["net/http", "servemux", "formvalue", "parsemultipartform", "parseform", "maxbytesreader", "r.host", "remoteaddr"],
+     "implies": "ServeMux の登録の読み方（メソッドを書かない登録は全メソッド、末尾が / の登録は配下すべて、{$} は完全一致）。r.FormValue / r.ParseForm / r.ParseMultipartForm は呼んだ時点で本文とクエリの両方を解釈する（認証やCSRF 検査の中で呼ばれていれば、認証より前に本文が解釈される）。本文の上限（http.MaxBytesReader の有無）、r.Host・r.RemoteAddr・X-Forwarded-* を何の判断に使っているか、Server のタイムアウト設定",
+     "note": "標準ライブラリなので go.mod には現れない。ルーターを使わず、パスの文字列比較（前方一致・後方一致）で公開範囲や認証の例外を決めている箇所は、ルート表に現れない入口になる"},
+    {"id": "go-stdlib-parsers", "category": "解釈処理（Go 標準ライブラリ）", "layer": "parser",
+     "match": {"code": [{"glob": "*.go", "regex": "\"(encoding/xml|encoding/gob|encoding/csv|html/template|text/template|archive/zip|archive/tar|compress/gzip|os/exec|net/mail|mime/multipart|image|image/(png|jpeg|gif)|golang\\.org/x/net/html|golang\\.org/x/net/html/charset)\""}]},
+     "keywords": ["encoding/xml", "xml.newdecoder", "xml.unmarshal", "html/template", "text/template", "archive/zip", "archive/tar", "os/exec", "exec.command", "net/mail", "encoding/gob", "encoding/csv", "x/net/html", "charset"],
+     "implies": "XML（encoding/xml は外部実体を展開しないが、文字コードの変換や巨大入力は受ける）、テンプレート（text/template に外部の値を渡していないか。template.HTML などへの型変換で無害化を外している箇所）、アーカイブ展開、外部コマンド、メール、HTML の解析、画像の復号。どの入口の値が届くか",
+     "note": "標準ライブラリなので go.mod には現れない。import 文で探す"}
   ]
 }

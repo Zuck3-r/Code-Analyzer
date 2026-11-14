@@ -603,6 +603,13 @@
   {"id": "nginx-stub-status", "name": "nginx の状態表示・既定の配信", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "*.conf|nginx*|*.conf.template|*.vhost", "regex": "stub_status|autoindex\\s+on"}]}, "endpoints": [
    {"m": "GET", "p": "/{stub_status の location}", "tags": ["debug", "internal"], "c": "high", "note": "接続数などの状態表示。allow / deny で絞られているか"},
    {"m": "GET", "p": "/{autoindex の location}/", "tags": ["static"], "c": "high", "note": "autoindex on の場所はディレクトリ一覧を返す"}
+  ]},
+  {"id": "go-autocert", "name": "Go の autocert（証明書の自動取得）", "section": "Go", "when": {"go": ["golang.org/x/crypto"], "code": [{"glob": "*.go", "regex": "acme/autocert"}]}, "endpoints": [
+   {"m": "GET", "p": "/.well-known/acme-challenge/{token}", "port": 80, "tags": ["internal"], "c": "medium", "note": "autocert.Manager.HTTPHandler を使うと、80 番で別の HTTP サーバーが立つ。フォールバックのハンドラ（多くは HTTPS へのリダイレクト）が Host ヘッダをどう使うか"},
+   {"m": "TLS", "p": "(TLS-ALPN-01 の応答)", "proto": "tls", "port": 443, "c": "low", "note": "GetCertificate が、接続してきた SNI のホスト名に対して証明書の取得を試みる。HostPolicy で対象ホストを絞っているか"}
+  ]},
+  {"id": "go-prometheus", "name": "Prometheus クライアント (Go)", "section": "Go", "when": {"go": ["github.com/prometheus/client_golang"]}, "endpoints": [
+   {"m": "GET", "p": "/metrics", "tags": ["debug", "internal"], "c": "medium", "note": "promhttp.Handler の組み込み先と、そこへのアクセス制限（IP の判定に何を使っているか）を読む"}
   ]}
  ]
 }
