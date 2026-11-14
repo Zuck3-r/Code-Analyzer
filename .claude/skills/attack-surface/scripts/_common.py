@@ -366,7 +366,7 @@ class Index:
 
 CONF_RANK = {"high": 3, "medium": 2, "low": 1}
 PRIO_RANK = {"high": 3, "medium": 2, "low": 1}
-LIST_FIELDS = ("tags", "flags", "params", "fed_by", "reaches", "consumes", "also_hosts")
+LIST_FIELDS = ("tags", "flags", "params", "fed_by", "reaches", "consumes", "also_hosts", "calls")
 NOTE_MAX_PARTS, NOTE_MAX_CHARS, CONSUMES_MAX = 3, 600, 10
 
 
@@ -443,7 +443,7 @@ def absorb(cur: dict, r: dict) -> None:
     for e in r["evidence"]:
         if (norm_file(e.get("file", "")), e.get("line")) not in seen:
             cur["evidence"].append(e)
-    for k in ("tags", "flags", "fed_by", "reaches"):
+    for k in ("tags", "flags", "fed_by", "reaches", "calls"):
         merged = list(dict.fromkeys([*map(str, cur[k]), *map(str, r[k])]))
         cur[k] = sorted(merged) if k in ("tags", "flags") else merged
     cur["consumes"] = list(map(str, cur["consumes"]))

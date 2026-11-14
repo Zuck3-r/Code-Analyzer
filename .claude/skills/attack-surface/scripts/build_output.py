@@ -4,7 +4,7 @@
   - 同じ対象が残っていれば 1 件に統合する（consolidate.py と同じ照合）
   - 引用が別の行に 1 か所だけ見つかる場合は行番号を直す
   - 秘密情報らしき値を伏せる
-  - ID (AS-0001…) を振り、targets.csv / targets.md / attack-surface.json / stats.json を書く
+  - ID (AS-0001…) を振り、attack-surface.xlsx（主たる成果物）/ targets.csv / targets.md / requests.http / attack-surface.json / stats.json を書く
   - 出力フォルダの親に LATEST.txt（最新の実行フォルダ名）を書く
 
 使い方:
@@ -26,6 +26,30 @@ from _common import (  # noqa: E402
     short_file, squash, utf8_stdout,
 )
 from check import find_quote, quote_in  # noqa: E402
+from xlsx import Link, Workbook  # noqa: E402
+
+LEGEND = [
+    ("優先度", "診断で先に見る価値（高 / 中 / 低）。脆弱だという判定ではない"),
+    ("認証", "その項目に届く前に、利用者の認証・認可を実際に通るか。「なし」には、ガードが付いているが中身が何も確かめていないものを含む"),
+    ("パラメータ", "種類ごとに 1 行。* は必須、? は必須かどうかがコードから分からなかったもの。名前が * の項目は、本文が丸ごと別の処理に渡っていることを表す"),
+    ("確度", "高: 定義を直接読んだ / 中: 規約や推定を含む / 低: 存在する可能性がある程度"),
+    ("根拠", "ファイルと行。引用の全文は attack-surface.json にある"),
+    ("IMPLICIT", "コードに定義が無く、フレームワーク・ライブラリ・イメージが生やしている"),
+    ("UNREFERENCED", "定義はあるが、入力内のどのクライアントからも呼ばれていない"),
+    ("TESTS_ONLY", "テストコードからしか呼ばれていない"),
+    ("UNDOCUMENTED", "API 仕様書・コレクションに載っていない"),
+    ("SPEC_ONLY", "仕様・文書にはあるが、実装が入力内に無い"),
+    ("SHADOW", "呼び出されているが、受け側の定義が入力内に無い（渡されていないリポジトリがある可能性）"),
+    ("LEGACY_VERSION", "新しい版が別にある旧 API"),
+    ("DEV_ONLY", "条件付きで有効（デバッグフラグ、環境変数、開発用設定）"),
+    ("EXPOSED_INFRA", "インフラ定義上、外部に露出している"),
+    ("PREFIX_UNRESOLVED", "公開パスの接頭辞を確定できていない"),
+    ("UNINTENDED_INTAKE", "開発者のコードが読んでいないのに、基盤が受け取っている"),
+    ("SECOND_ORDER", "受け取った場所とは別の場所・別の時点で解釈される"),
+    ("REACH_UNKNOWN", "解釈処理はあるが、外部の値が届く経路を確定できていない"),
+    ("PRE_AUTH", "認証・認可より前に動く"),
+    ("AUTH_CONFLICT", "認証の判断が担当者の間で食い違った（要確認）"),
+]
 
 PRIO_JA = {"high": "高", "medium": "中", "low": "低", "": "-"}
 AUTH_JA = {"required": "あり", "none": "なし", "unknown": "不明（証跡なし）", "n/a": "該当なし"}
@@ -94,6 +118,71 @@ def params_text(it: dict, sep: str = "\n") -> str:
         groups.setdefault(str(p.get("in", "") or "other"), []).append(f"{p['name']}{mark}{typ}")
     order = [k for k in PARAM_ORDER if k in groups] + [k for k in groups if k not in PARAM_ORDER]
     return sep.join(f"{k}: {', '.join(groups[k])}" for k in order)
+
+
+_SAMPLE = {"string": "string", "str": "string", "int": 0, "integer": 0, "number": 0, "float": 0.0, "bool": False, "boolean": False,
+           "array": [], "object": {}, "file": "(file)"}
+
+
+def _sample(p: dict):
+    t = str(p.get("type", "") or "").lower()
+    if t.startswith("enum(") and t.endswith(")"):
+        return t[5:-1].split("|")[0]
+    return _SAMPLE.get(t, f"<{p.get('name', '')}>")
+
+
+def _put(obj: dict, name: str, value) -> None:
+    """`address.zip` `items[].sku` を入れ子にして置く。"""
+    parts = [x for x in str(name).split(".") if x]
+    cur = obj
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        is_list = part.endswith("[]")
+        key = part[:-2] if is_list else part
+        if last:
+            cur[key] = [value] if is_list else value
+        elif is_list:
+            if not (isinstance(cur.get(key), list) and cur[key] and isinstance(cur[key][0], dict)):
+                cur[key] = [{}]
+            cur = cur[key][0]
+        else:
+            if not isinstance(cur.get(key), dict):
+                cur[key] = {}
+            cur = cur[key]
+
+
+def request_template(it: dict) -> str:
+    """入口 1 件ぶんの、送信の出発点になるリクエスト（REST Client 形式）。値は仮で、コードから読めた項目名と場所だけを反映する。"""
+    ps = [p for p in it["params"] if isinstance(p, dict) and p.get("name")]
+    by = lambda where: [p for p in ps if p.get("in") == where]  # noqa: E731
+    method = str(it.get("method", "") or "GET").upper()
+    method = "GET" if method in ("ANY", "") else method
+    url = (f"https://{it['host']}" if it.get("host") else "{{base}}") + str(it.get("path", ""))
+    q = [p for p in by("query") if p["name"] != "*"]
+    if q:
+        url += "?" + "&".join(f"{p['name']}={{{{{p['name']}}}}}" for p in q)
+    lines = [f"{method} {url}"]
+    lines += [f"{p['name']}: {{{{{p['name']}}}}}" for p in by("header")]
+    if by("cookie"):
+        lines.append("Cookie: " + "; ".join(f"{p['name']}={{{{{p['name']}}}}}" for p in by("cookie")))
+    body, form, files = by("body"), by("form"), by("file")
+    if files:
+        lines += ["Content-Type: multipart/form-data; boundary=----x", ""]
+        for p in files:
+            lines += ["------x", f'Content-Disposition: form-data; name="{p["name"]}"; filename="sample.bin"', "", "(ファイルの中身)"]
+        for p in [*form, *body]:
+            if p["name"] != "*":
+                lines += ["------x", f'Content-Disposition: form-data; name="{p["name"]}"', "", str(_sample(p))]
+        lines.append("------x--")
+    elif form:
+        lines += ["Content-Type: application/x-www-form-urlencoded", "", "&".join(f"{p['name']}={_sample(p)}" for p in form if p["name"] != "*")]
+    elif body:
+        obj: dict = {}
+        for p in body:
+            if p["name"] != "*":
+                _put(obj, p["name"], _sample(p))
+        lines += ["Content-Type: application/json", "", json.dumps(obj, ensure_ascii=False, indent=2)]
+    return "\n".join(lines)
 
 
 def cell(s) -> str:
@@ -182,7 +271,7 @@ def main() -> int:
     # ---- CSV（Excel で開けるよう BOM 付き）
     header = ["ID", "層", "優先度", "ソース", "種別", "メソッド", "パス / 識別子", "ホスト", "ソース内のパス", "概要", "認証", "認証の根拠", "パラメータ",
               "受け取るもの・解釈するもの", "掛かる範囲", "部品（バージョン）", "届く入口", "届き方", "届く解釈点",
-              "フラグ", "タグ", "確度", "由来", "根拠（ファイル:行）", "備考", "優先度の理由", "発見元"]
+              "フラグ", "タグ", "確度", "由来", "根拠（ファイル:行）", "備考", "優先度の理由", "発見元", "呼び出す API（画面）"]
     with open(run / "targets.csv", "w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(header)
@@ -195,7 +284,7 @@ def main() -> int:
                 squash(it.get("parses", "")) or joined(it.get("consumes")), squash(it.get("scope", "")), squash(it.get("component", "")),
                 joined(it.get("fed_by")), REACH_JA.get(it.get("reach", ""), it.get("reach", "") or ""), joined(it.get("reaches")),
                 " ".join(it["flags"]), " ".join(it["tags"]), CONF_JA.get(it.get("confidence", ""), it.get("confidence", "")), it.get("origin", ""),
-                ev_text(it, 5), squash(it.get("notes", "")), squash(it.get("priority_reason", "")), it.get("found_by", ""),
+                ev_text(it, 5), squash(it.get("notes", "")), squash(it.get("priority_reason", "")), it.get("found_by", ""), joined(it.get("calls")),
             ])
 
     # ---- Markdown の表
@@ -250,7 +339,132 @@ def main() -> int:
                 f"{AUTH_JA.get(it.get('auth', ''), '')} | {' '.join(it['flags'])} | {CONF_JA.get(it.get('confidence', ''), '')} | {cell(ev_text(it, 2))} |"
             )
         md.append("")
+    # ---- サイトマップ: 画面と、そこから呼ばれる API（calls を一覧の ID に結ぶ）
+    by_call: dict[tuple, str] = {}
+    for it in items:
+        if is_url_item(it) and it["kind"] != "page":
+            for p in (it.get("path"), it.get("internal_path")):
+                if p:
+                    by_call[(str(it.get("method", "")).upper(), norm_path(str(p)))] = it["id"]
+
+    def resolve_calls(it: dict) -> list[str]:
+        out = []
+        for c in as_list(it.get("calls")):
+            m, _, p = str(c).strip().partition(" ")
+            m, p = (m.upper(), p) if p else ("", m)
+            hit = by_call.get((m, norm_path(p))) or next((v for (mm, pp), v in by_call.items() if pp == norm_path(p) and (not m or mm in ("ANY", ""))), None) \
+                or next((v for (mm, pp), v in by_call.items() if mm == m and pp.endswith(norm_path(p)) and len(norm_path(p)) > 1), None)
+            out.append(f"{hit} ({c})" if hit else f"未対応 ({c})")
+        return out
+
+    pages = [it for it in items if it["kind"] == "page"]
+    if pages:
+        md += ["# サイトマップ（画面と、呼び出す API）", "",
+               "画面のコードから辿れた呼び出しを、一覧の ID に結んだもの。「未対応」は、呼び出し先が一覧に見つからなかったもの（受ける側が入力に無い、または書き方の違い）。", "",
+               "| ID | ソース | パス | 概要 | 認証 | 呼び出す API |", "|---|---|---|---|---|---|"]
+        for it in pages:
+            md.append(f"| {it['id']} | {it.get('source', '')} | `{cell(it.get('path', ''))}` | {cell(it.get('summary', ''))} | {AUTH_JA.get(it.get('auth', ''), '')} | "
+                      f"{'<br>'.join(cell(c) for c in resolve_calls(it))} |")
+        md.append("")
     (run / "targets.md").write_text("\n".join(md), encoding="utf-8")
+
+    # ---- リクエストのひな形（HTTP で送れる入口だけ）
+    sendable = [it for it in items if is_url_item(it) and it["kind"] in ("http", "page", "static", "proxy", "api", "rest")]
+    http_lines = ["# 診断の出発点にするリクエストのひな形（機械生成）。",
+                  "# 項目名と場所は、コードから読めたものだけを反映している。値は仮で、実際に通る値は実通信で確かめること。",
+                  "# {{base}} は対象の URL、{{名前}} は埋める値。パスの {id} も置き換える。VS Code の REST Client などでそのまま開ける。", ""]
+    for it in sendable:
+        flags = f" [{' '.join(it['flags'])}]" if it["flags"] else ""
+        http_lines += [f"### {it['id']} {it.get('source', '')} — {squash(it.get('summary', ''))[:80]} / 認証: {AUTH_JA.get(it.get('auth', ''), '')}{flags}",
+                       request_template(it), ""]
+    (run / "requests.http").write_text("\n".join(http_lines), encoding="utf-8")
+    # ---- Excel ブック（主たる成果物）
+    book = Workbook()
+    entries = [it for it in items if it["layer"] == "入口"]
+    intake_items = [it for it in items if it["layer"] == "受け口"]
+    parser_items = [it for it in items if it["layer"] == "解釈点"]
+    req_row = {it["id"]: n for n, it in enumerate(sendable, 2)}      # 「リクエスト」シートでの行
+    entry_row = {it["id"]: n for n, it in enumerate(entries, 2)}     # 「対象一覧」シートでの行
+
+    def hosts(it: dict) -> str:
+        return "\n".join(h for h in [it.get("host", ""), *as_list(it.get("also_hosts"))] if h)
+
+    def prio(it: dict) -> str:
+        return PRIO_JA.get(it.get("priority", ""), it.get("priority", "") or "-")
+
+    def styles(n: int, i: int, link_cols: tuple = ()) -> list[str]:
+        base = "alt" if i % 2 else "text"
+        return [("link_alt" if base == "alt" else "link") if c in link_cols else base for c in range(n)]
+
+    sh = book.sheet("概要", widths=[26, 14, 14, 14, 14, 60], freeze=False, autofilter=False)
+    sh.row(["アタックサーフェス調査 対象一覧"], "title")
+    sh.row([f"実行: {stats['run']}　／　入力: {stats['input_root']}"], "note")
+    sh.row([""], "note")
+    sh.row(["ソース", "入口", "受け口", "解釈点", "計"], "head")
+    for i, s in enumerate(stats["sources"]):
+        sh.row([s["name"], s["入口"], s["受け口"], s["解釈点"], s["入口"] + s["受け口"] + s["解釈点"]], "alt" if i % 2 else "text")
+    sh.row(["計", lay.get("入口", 0), lay.get("受け口", 0), lay.get("解釈点", 0), len(items)], "head")
+    sh.row([""], "note")
+    sh.row(["シート", "内容"], "head")
+    for name, desc in (("対象一覧", "入口。外部から入力が届く経路。1 行 1 対象。ID からリクエストのひな形へ飛べる"),
+                       ("受け口", "開発者のコードが動く前に、基盤（フレームワーク・ミドルウェア・プロキシ）が受け取っているもの"),
+                       ("解釈点", "受け取った値を解釈する処理と、値が届く入口"),
+                       ("サイトマップ", "画面と、その画面から呼ばれる API（画面がある場合のみ）"),
+                       ("リクエスト", "HTTP で送れる入口ごとのリクエストのひな形。項目名と場所はコードから読めたもの、値は仮"),
+                       ("凡例", "フラグ・記号・列の意味")):
+        sh.row([name, desc], "text")
+    sh.row([""], "note")
+    sh.row(["静的にコードを読んだ結果です。脆弱性の有無は判定していません。確定できなかった点は coverage.md、解説は REPORT.md にあります。"], "note")
+
+    head = ["ID", "優先度", "ソース", "種別", "ホスト", "Method", "パス / 識別子", "パラメータ", "概要", "認証", "認証の根拠", "フラグ", "届く解釈点", "確度", "根拠（ファイル:行）",
+            "備考", "優先度の理由"]
+    sh = book.sheet("対象一覧", widths=[10, 7, 14, 9, 22, 9, 44, 34, 44, 12, 34, 22, 30, 6, 38, 50, 34])
+    sh.row(head, "head")
+    for i, it in enumerate(entries):
+        first = Link(it["id"], "リクエスト", req_row[it["id"]]) if it["id"] in req_row else it["id"]
+        sh.row([first, prio(it), it.get("source", ""), it["kind"], hosts(it), it.get("method", ""), it.get("path", ""), params_text(it), squash(it.get("summary", "")),
+                AUTH_JA.get(it.get("auth", ""), it.get("auth", "")), squash(it.get("auth_evidence", "")), "\n".join(it["flags"]), "\n".join(map(str, as_list(it.get("reaches")))),
+                CONF_JA.get(it.get("confidence", ""), ""), ev_text(it, 3).replace(" ; ", "\n"), squash(it.get("notes", "")), squash(it.get("priority_reason", ""))],
+               styles(len(head), i))
+
+    head = ["ID", "優先度", "ソース", "識別子", "掛かる範囲", "受け取るもの", "部品（バージョン）", "概要", "認証", "フラグ", "確度", "根拠（ファイル:行）", "備考", "優先度の理由"]
+    sh = book.sheet("受け口", widths=[10, 7, 14, 40, 20, 40, 28, 48, 12, 22, 6, 38, 50, 34])
+    sh.row(head, "head")
+    for i, it in enumerate(intake_items):
+        sh.row([it["id"], prio(it), it.get("source", ""), it.get("path", ""), squash(it.get("scope", "")), "\n".join(map(str, as_list(it.get("consumes")))),
+                squash(it.get("component", "")), squash(it.get("summary", "")), AUTH_JA.get(it.get("auth", ""), it.get("auth", "")), "\n".join(it["flags"]),
+                CONF_JA.get(it.get("confidence", ""), ""), ev_text(it, 3).replace(" ; ", "\n"), squash(it.get("notes", "")), squash(it.get("priority_reason", ""))], styles(len(head), i))
+
+    head = ["ID", "優先度", "ソース", "解釈点", "何を解釈するか", "部品（バージョン）", "届く入口", "届き方", "概要", "認証", "フラグ", "確度", "根拠（ファイル:行）", "備考", "優先度の理由"]
+    sh = book.sheet("解釈点", widths=[10, 7, 14, 40, 36, 26, 36, 14, 46, 12, 22, 6, 38, 50, 34])
+    sh.row(head, "head")
+    for i, it in enumerate(parser_items):
+        sh.row([it["id"], prio(it), it.get("source", ""), it.get("path", ""), squash(it.get("parses", "")), squash(it.get("component", "")),
+                "\n".join(map(str, as_list(it.get("fed_by")))) or "未特定", REACH_JA.get(it.get("reach", ""), it.get("reach", "") or "-"), squash(it.get("summary", "")),
+                AUTH_JA.get(it.get("auth", ""), it.get("auth", "")), "\n".join(it["flags"]), CONF_JA.get(it.get("confidence", ""), ""),
+                ev_text(it, 3).replace(" ; ", "\n"), squash(it.get("notes", "")), squash(it.get("priority_reason", ""))], styles(len(head), i))
+
+    if pages:
+        head = ["ID", "ソース", "ホスト", "パス", "概要", "認証", "呼び出す API"]
+        sh = book.sheet("サイトマップ", widths=[10, 14, 22, 40, 48, 12, 60])
+        sh.row(head, "head")
+        for i, it in enumerate(pages):
+            first = Link(it["id"], "対象一覧", entry_row[it["id"]]) if it["id"] in entry_row else it["id"]
+            sh.row([first, it.get("source", ""), hosts(it), it.get("path", ""), squash(it.get("summary", "")), AUTH_JA.get(it.get("auth", ""), ""),
+                    "\n".join(resolve_calls(it))], styles(len(head), i))
+
+    sh = book.sheet("リクエスト", widths=[10, 9, 46, 12, 110])
+    sh.row(["ID", "Method", "パス", "認証", "リクエストのひな形（値は仮。{{base}} と {{名前}}、パスの {id} を置き換える）"], "head")
+    for it in sendable:
+        first = Link(it["id"], "対象一覧", entry_row[it["id"]]) if it["id"] in entry_row else it["id"]
+        sh.row([first, it.get("method", ""), it.get("path", ""), AUTH_JA.get(it.get("auth", ""), ""), request_template(it)], ["link", "text", "text", "text", "mono"])
+
+    sh = book.sheet("凡例", widths=[24, 100], autofilter=False)
+    sh.row(["項目", "意味"], "head")
+    for k, v in LEGEND:
+        sh.row([k, v], "text")
+    book.save(run / "attack-surface.xlsx")
+
     try:
         (run.parent / "LATEST.txt").write_text(run.name + "\n", encoding="utf-8")
     except OSError:
@@ -258,7 +472,7 @@ def main() -> int:
 
     print(f"targets={len(items)} entries={lay.get('入口', 0)} intake={lay.get('受け口', 0)} parsers={lay.get('解釈点', 0)} "
           f"merged_from={len(rows)} line_fixed={fixed} secrets_masked={masked} high={len(high)}")
-    print(f"out={run.as_posix()} (attack-surface.json targets.csv targets.md stats.json)")
+    print(f"out={run.as_posix()} (attack-surface.xlsx attack-surface.json targets.csv targets.md requests.http stats.json)")
     return 0
 
 

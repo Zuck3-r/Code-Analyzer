@@ -61,6 +61,7 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 | `auth` | ○ | その項目に届く前に、**利用者の認証・認可を実際に通るか**。`required` / `none` / `unknown` / `n/a`。付け方は下の「認証欄の付け方」。**証拠が無いのに `required` にしない** |
 | `auth_evidence` | | 何を見てそう判断したか。認可（ロール・所有者確認）の有無も分かれば |
 | `params` | 入口は○ | その入口が受け取る項目。書き方は下の「パラメータの書き方」。値を受け取る入口（POST など）で空のままにしない |
+| `calls` | | 画面（`page`）用。その画面のコードから呼ばれる API を `"メソッド パス"` で並べる（`["GET /api/users", "POST /api/orders"]`）。パスはソース内のパスで、呼び出しのコードに書かれているとおり。統合時に一覧の ID に結ばれ、サイトマップになる |
 | `reaches` | | 入口用。その入口の入力が届く解釈点（解釈点の `path` を並べる）。手順 5 で埋める |
 | `scope` | 受け口は○ | 受け口用。掛かる範囲: `全ルート` / 接頭辞（`/api/` 配下）/ 個別のルート |
 | `consumes` | | 受け口用。受け取るもの（本文の形式、ヘッダ名、Cookie 名、構文）を並べる |
@@ -295,8 +296,10 @@ JSON Lines。ユニットに含まれる **全ファイル** について 1 行�
 |---|---|---|
 | `REPORT.md` | あなたが書く | 報告書（下記） |
 | `coverage.md` | あなたが書く | 網羅状況と限界（下記） |
-| `targets.csv` | `build_output.py` | 診断対象一覧。1 行 1 対象。Excel で開ける（UTF-8 BOM） |
+| `attack-surface.xlsx` | `build_output.py` | **主たる成果物。** Excel ブック。シート: 概要 / 対象一覧（入口）/ 受け口 / 解釈点 / サイトマップ（画面がある場合）/ リクエスト / 凡例。対象一覧の ID からリクエストのひな形へ、リクエストとサイトマップの ID から対象一覧へ飛べる |
+| `targets.csv` | `build_output.py` | 同じ一覧を 1 枚の表にしたもの（他のツールへの取り込み用。UTF-8 BOM） |
 | `targets.md` | `build_output.py` | 同じ内容の Markdown 表（ソース別） |
+| `requests.http` | `build_output.py` | HTTP で送れる入口ごとの、リクエストのひな形（REST Client 形式）。項目名と場所はコードから読めたもの、値は仮 |
 | `attack-surface.json` | `build_output.py` | 全項目の機械可読データ |
 | `stats.json` | `build_output.py` | 件数の集計（報告書の数字はここから引く） |
 | `work/` | 各手順 | 中間物一式（再開・検証用）。`knowledge.md`（知識ベースの抜粋）、検査結果は `work/check/`（`report.md` 穴の検出とパス間の突き合わせ、`merge.md` 統合、`overrides.todo.jsonl` 優先度のひな形、`verify.md` 最終照合） |

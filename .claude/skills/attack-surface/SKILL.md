@@ -136,6 +136,8 @@ python .claude/skills/attack-surface/scripts/check.py RUN
 - **解釈処理らしい記述があるのに検出ゼロのファイル** → 同上。外部の値が届き得るかを見る
 - **検出のあるファイルの中で、近くに受け口・解釈点の根拠が無い「解釈処理らしい行」**（4b）→ ルートは載せたのに同じファイルの展開・変換・外部コマンドを載せ忘れた、という形の見落とし。行を開いて確かめる
 - **知識ベースに手がかりがあるのに検出項目に出てこないもの**（5a 部品 / 5b 暗黙のエンドポイント）→ この時点では多く出てよい（パス 2 の `intake` `parsers` `implicit` レンズが主に拾う）。パス 2 の後にもう一度見る
+- **仕様書との照合**（5c。入力に OpenAPI / Swagger があるときだけ出る）→ 仕様にあるのに一覧に無い操作は、実装を探して載せる。実装が入力に無ければ `origin: spec`・`SPEC_ONLY` で載せる。
+  コードにあるのに仕様に無い入口は、`UNDOCUMENTED` の候補
 - **証跡の不一致** → 該当ファイルを開き直して行と引用を直す。本当に無ければその項目は誤りなので、`RUN/work/aliases.jsonl` に取り下げを書く（手順 6）
 - **統合で割れやすい書き方** → 直さなくても統合はできるが、パス 2 の依頼文で念を押す材料にする（host 欄の自由記述、`種類:` の無い識別子など）
 
@@ -257,7 +259,9 @@ python .claude/skills/attack-surface/scripts/check.py RUN --verify
 python .claude/skills/attack-surface/scripts/build_output.py RUN
 ```
 
-`final.findings.jsonl` から `attack-surface.json`（全項目）、`targets.csv`（診断対象一覧。Excel で開ける）、`targets.md`（同じ内容の表）、`stats.json`（件数）が生成される。
+`final.findings.jsonl` から、主たる成果物の `attack-surface.xlsx`（Excel ブック。対象一覧・受け口・解釈点・サイトマップ・リクエスト・凡例のシート）と、
+`attack-surface.json`（全項目）、`targets.csv`（同じ一覧を 1 枚の表にしたもの）、`targets.md`（同じ内容の表と、画面から呼ばれる API を結んだサイトマップ）、
+`requests.http`（HTTP で送れる入口ごとのリクエストのひな形）、`stats.json`（件数）が生成される。ひな形の質はパラメータの記録で決まるので、`verify.md` の「パラメータが書かれていない入口」は出力の前に潰す。
 件数や表は必ずこの生成物から引く（手で数え直さない。数字が食い違う原因になる）。
 
 あなたが書くのは次の 2 つ。構成は [references/output-format.md](references/output-format.md) の「報告書」。
@@ -266,7 +270,7 @@ python .claude/skills/attack-surface/scripts/build_output.py RUN
   読み手・探し手が leads / notes に書いた「不審な記述」と「痕跡」は、ここに集めて載せる
 - `RUN/coverage.md` — 何を読み、何を読まず、何が確定できなかったか。足りない入力。未収束の範囲
 
-最後にユーザーへ、出力先・対象件数・特に注意すべき発見（数件）・不足している入力を簡潔に伝える。
+最後にユーザーへ、出力先（まず `attack-surface.xlsx` と `REPORT.md`）・対象件数・特に注意すべき発見（数件）・不足している入力を簡潔に伝える。
 
 ## 規模に応じた進め方
 

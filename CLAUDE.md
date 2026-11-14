@@ -14,7 +14,7 @@
 | 場所 | 役割 |
 |---|---|
 | `Input/` | 解析対象を置く場所。直下の 1 フォルダ（または zip）= 1 ソース。**読み取り専用** |
-| `Output/<日時>/` | 実行ごとの結果。`REPORT.md` `coverage.md` `targets.csv` `targets.md` `attack-surface.json` と中間物 `work/` |
+| `Output/<日時>/` | 実行ごとの結果。`attack-surface.xlsx`（主たる成果物）`REPORT.md` `coverage.md` `targets.csv` `targets.md` `requests.http` `attack-surface.json` と中間物 `work/` |
 | `.claude/skills/attack-surface/` | スキル本体、参照資料、帳簿付け用スクリプト |
 | `.claude/agents/surface-analyst.md` | 読み手・探し手用のエージェント定義（読む・書くだけで、コマンド実行はできない） |
 

@@ -224,6 +224,92 @@ def implicit_gaps(matched: dict, rows: list[dict], dismissed: set) -> tuple[list
     return gaps, stat
 
 
+HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
+
+
+def spec_operations(text: str) -> list[tuple[str, str]] | None:
+    """OpenAPI / Swagger の文書から (メソッド, パス) を取り出す。仕様書でなければ None。JSON と YAML の両方に対応（YAML は字下げから読む）。"""
+    head = text[:4000]
+    if text.lstrip().startswith("{"):
+        if not re.search(r'"(openapi|swagger)"\s*:', text) or not re.search(r'"paths"\s*:', text):
+            return None
+    elif not re.search(r"""(?im)^\s*["']?(openapi|swagger)["']?\s*:""", head) or not re.search(r"""(?m)^\s*["']?paths["']?\s*:""", text):
+        return None
+    ops: list[tuple[str, str]] = []
+    if text.lstrip().startswith("{"):
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            return None
+        base = str(doc.get("basePath", "") or "").rstrip("/")
+        for path, item in (doc.get("paths") or {}).items():
+            if isinstance(item, dict):
+                ops += [(m.upper(), base + str(path)) for m in item if m.lower() in HTTP_METHODS]
+        return ops
+    base_m = re.search(r"""(?m)^basePath\s*:\s*["']?([^\s"'#]+)""", text)
+    base = base_m.group(1).rstrip("/") if base_m else ""
+    in_paths, path, path_indent = False, "", -1
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            in_paths = bool(re.match(r"""["']?paths["']?\s*:\s*$""", line.strip()))
+            continue
+        if not in_paths:
+            continue
+        m = re.match(r"""\s+["']?(/[^"':]*(?::[^"'/\s][^"':]*)*)["']?\s*:\s*(?:#.*)?$""", line)
+        if m and (path_indent < 0 or indent <= path_indent):
+            path, path_indent = m.group(1), indent
+            continue
+        m = re.match(r"""\s+["']?(\w+)["']?\s*:""", line)
+        if m and path and indent > path_indent and m.group(1).lower() in HTTP_METHODS:
+            ops.append((m.group(1).upper(), base + path))
+    return ops
+
+
+def spec_gaps(inventory: dict, rows: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    """(見つけた仕様書, 仕様にあるのに一覧に無い操作, 一覧にあるのに仕様に無い入口)。パスは末尾の一致で比べる（接頭辞の付き方が違い得るため）。"""
+    base = inventory["base_dir"]
+    specs, missing, undocumented = [], [], []
+    by_source: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for r in rows:
+        for p in (r.get("path"), r.get("internal_path")):
+            if p and str(p).lstrip().startswith(("/", "http")):
+                by_source[str(r.get("source", "")).lower()].append((str(r.get("method", "") or "").upper(), norm_path(str(p))))
+
+    def same(a: str, b: str) -> bool:
+        return a == b or (len(b) > 1 and a.endswith(b)) or (len(a) > 1 and b.endswith(a))
+
+    spec_ops: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for f in inventory["files"]:
+        if not f.get("text") or f["ext"] not in (".json", ".yaml", ".yml") or f["size"] > 5_000_000:
+            continue
+        try:
+            ops = spec_operations(read_text(resolve(base, f["path"])))
+        except OSError:
+            continue
+        if ops is None:
+            continue
+        specs.append({"file": f["path"], "source": f["source"], "ops": len(ops)})
+        spec_ops[f["source"].lower()] += [(m, norm_path(p)) for m, p in ops]
+        for m, p in ops:
+            np = norm_path(p)
+            # 仕様書は別のソース（文書用のリポジトリ）に置かれることがあるので、全ソースの項目と比べる
+            if not any(same(fp, np) and (fm == m or fm in ("ANY", "")) for found in by_source.values() for fm, fp in found):
+                missing.append({"file": f["path"], "source": f["source"], "method": m, "path": p})
+    all_spec = [op for ops in spec_ops.values() for op in ops]
+    if all_spec:
+        for r in rows:
+            if str(r.get("kind", "")).lower() != "http" or str(r.get("origin", "")).lower() != "code" or "UNDOCUMENTED" in as_list(r.get("flags")):
+                continue
+            m, np = str(r.get("method", "") or "").upper(), norm_path(str(r.get("path", "")))
+            ip = norm_path(str(r.get("internal_path", ""))) if r.get("internal_path") else np
+            if not any((same(np, sp) or same(ip, sp)) and (sm == m or m in ("ANY", "")) for sm, sp in all_spec):
+                undocumented.append(r)
+    return specs, missing, undocumented
+
+
 def collect(run: Path, verify: bool) -> tuple[dict[str, list[dict]], list[str], list[dict], list[str]]:
     """(パス名 → 検出項目, 読めなかった行, 読了記録, 見つけた findings ファイル名)"""
     work = run / "work"
@@ -602,6 +688,22 @@ def main() -> int:
             eps = "<br>".join(f"`{e}`" for e in g["endpoints"][:6]) + (f"<br>ほか {len(g['endpoints']) - 6}" if len(g["endpoints"]) > 6 else "")
             md.append(f"| {g['source']} | `{g['id']}` | {g['name']} | {clues(g['hits'])} | {eps} |")
         md.append("")
+
+    # ---- 5c. 仕様書との照合（入力に OpenAPI / Swagger があるときだけ）
+    specs, spec_missing, spec_undoc = spec_gaps(inventory, all_rows)
+    summary["spec_files"] = len(specs)
+    if specs:
+        summary["spec_ops_missing"] = len(spec_missing)
+        summary["undocumented_candidates"] = len(spec_undoc)
+        md += ["### 5c. 仕様書（OpenAPI / Swagger）との照合", "",
+               "入力にあった仕様書: " + "、".join(f"`{s['file']}`（{s['ops']} 操作）" for s in specs), "",
+               f"**仕様にあるのに一覧に無い操作: {len(spec_missing)} 件。** 実装を探して載せる。実装が入力に無ければ、`origin: spec`・フラグ `SPEC_ONLY` で載せる（落とさない）。", ""]
+        if spec_missing:
+            md += ["| 仕様書 | メソッド | パス |", "|---|---|---|"] + [f"| `{x['file'].rsplit('/', 1)[-1]}` | {x['method']} | `{x['path']}` |" for x in spec_missing[:150]] + [""]
+        md += [f"**コードに定義があるのに仕様に無い入口: {len(spec_undoc)} 件。** その仕様書がこのソースを対象にしているなら、フラグ `UNDOCUMENTED` を付ける"
+               "（`overrides.jsonl`）。対象外の仕様書なら、そのままでよい。", ""]
+        if spec_undoc:
+            md += [f"- {r.get('source', '')} `{r.get('method', '')} {r.get('path', '')}`" for r in spec_undoc[:150]] + [""]
 
     # ---- 6. 証跡と形式
     problems, fixable = verify_evidence(all_rows, inventory["base_dir"])
