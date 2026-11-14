@@ -32,7 +32,8 @@ CATEGORIES = {
     "translation": ("D", "翻訳・文言の定義（言語ごとの同形のファイル群）"),
     "fixture": ("D", "テスト用のデータ（サンプルの HTML・XML・JSON・メールなど）"),
     "snapshot": ("D", "スナップショット・静的解析の基準ファイル"),
-    "history": ("D", "変更履歴・ライセンス・謝辞"),
+    "history": ("D", "ライセンス・謝辞・行動規範"),
+    "changelog": ("C", "変更履歴（流し読み: 削除・移動された入口と、セキュリティ修正の記載を検索して拾う。全文は読まない）"),
     "test": ("C", "テストコード（流し読み: 呼んでいる口と、テスト専用の経路・設定を拾う）"),
     "docs": ("C", "文書（流し読み: 構成・ポート・API の説明・コマンド例を拾う）"),
     "vendored": ("C", "リポジトリに同梱された外部ライブラリ（名前とバージョンを控える）"),
@@ -66,7 +67,8 @@ DOC_DIRS = {"docs", "doc", "documentation", "wiki", "website", "man"}
 DOC_EXT = {".md", ".mdx", ".rst", ".adoc", ".asciidoc", ".1", ".5", ".8"}
 VENDOR_DIRS = {"vendor", "vendors", "third_party", "third-party", "thirdparty", "3rdparty"}
 MIGRATION_DIRS = {"migrations", "migration", "migrate"}
-HISTORY_NAME = re.compile(r"(?i)^(changelog|changes|history|news|release[-_ ]?notes?|licen[sc]e|copying|notice|authors|contributors|code[-_ ]of[-_ ]conduct|patents|credits|thanks)(\b|[._\-])")
+HISTORY_NAME = re.compile(r"(?i)^(licen[sc]e|copying|notice|authors|contributors|code[-_ ]of[-_ ]conduct|patents|credits|thanks)(\b|[._\-])")
+CHANGELOG_NAME = re.compile(r"(?i)^(changelog|changes|history|news|release[-_ ]?notes?|upgrading|upgrade[-_ ]?guide|breaking[-_ ]?changes)(\b|[._\-])")
 BASELINE_NAME = re.compile(r"(?i)baseline[^/]*\.(txt|json|xml|neon|ya?ml)$|\.snap$")
 SECRET_EXT = {".key", ".pem", ".crt", ".cer", ".ppk", ".asc", ".gpg", ".pub", ".jwk", ".keys"}
 SECRET_NAME = re.compile(r"(?i)^(id_(rsa|dsa|ecdsa|ed25519)|.*private[-_.]?key.*|.*\.keystore)$")
@@ -99,6 +101,8 @@ def _propose(rel: str, f: dict, lang_groups: set[str]) -> str:
         return "fixture"
     if in_fixture or in_test or TEST_NAME.search(rel):
         return "test"
+    if CHANGELOG_NAME.search(name) and ext in ("", ".md", ".txt", ".rst", ".adoc"):
+        return "changelog"
     if HISTORY_NAME.search(name) and ext in ("", ".md", ".txt", ".rst", ".adoc"):
         return "history"
     if any(d in VENDOR_DIRS for d in dirs):
