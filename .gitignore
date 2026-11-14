@@ -7,3 +7,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# 実験用（調査対象の取得物と結果。リモートには上げない）
+/experiments/
