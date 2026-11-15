@@ -6,7 +6,7 @@
   3. work/prefixes.jsonl（任意）: ソース内のパスを、外から見える公開パスに直す
   4. 同じ対象を 1 件に統合する（URL で表せる入口はメソッドとパス、それ以外は識別子か根拠の位置で照合）
   5. origin が implicit の項目に IMPLICIT を付け、各項目に短い鍵 (key) を振る
-  6. work/overrides.jsonl（任意）: フラグ・優先度・認証などの上書きと追記
+  6. work/overrides.jsonl（任意）: フラグ・認証・届く入口などの上書きと追記
   7. work/merged.findings.jsonl に書く（--final を付けると work/final.findings.jsonl にも書く）
   8. work/check/merge.md に、何をどうまとめたかを書く（優先度を付ける場合は、未設定の項目のひな形を work/check/overrides.todo.jsonl に出す）
 
@@ -23,7 +23,7 @@
       under … ソース内のパスがこの接頭辞で始まるものだけに適用する（省略時は全部）
 
   overrides.jsonl … 統合の後に、上の行から順に適用する。同じ項目に複数の行が当たれば、後の行が勝つ
-    {"match": {"source": "shop-api", "path_regex": "^/shop/api/v1/admin/"}, "set": {"priority": "high", "priority_reason": "管理系"}, "add_flags": ["UNREFERENCED"]}
+    {"match": {"source": "shop-api", "path_regex": "^/shop/api/v1/admin/"}, "add_flags": ["UNREFERENCED"], "add_tags": ["admin"]}
     {"match": {"key": "3f9a1c2e"}, "set": {"auth": "none"}, "remove_flags": ["AUTH_CONFLICT"]}
       match … 書いた条件をすべて満たす項目が対象。値をリストにすると「いずれか」。{} は全項目
               source kind method layer(入口/受け口/解釈点) flag tag path path_regex key found_by(部分一致) host origin auth confidence priority reach file(根拠のパスの部分一致)
