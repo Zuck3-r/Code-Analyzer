@@ -245,7 +245,7 @@
    {"m": "GET", "p": "/resume_historical_location", "c": "low"},
    {"m": "GET", "p": "/refresh_historical_location", "c": "low"}
   ]},
-  {"id": "wordpress", "name": "WordPress", "section": "PHP", "when": {"files": ["(^|/)wp-config(-sample)?\\.php$", "(^|/)wp-content/(plugins|themes)/", "(^|/)wp-includes/"], "composer": ["johnpbloch/wordpress", "roots/wordpress"]}, "endpoints": [
+  {"id": "wordpress", "name": "WordPress", "section": "PHP", "when": {"files": ["(^|/)wp-config(-sample)?\\.php$", "(^|/)wp-content/(plugins|themes)/", "(^|/)wp-includes/"], "composer": ["johnpbloch/wordpress", "roots/wordpress"], "code": [{"glob": "*.php", "regex": "(?m)^[ \\t/*#]*(Plugin|Theme) Name\\s*:"}, {"glob": "style.css", "regex": "(?m)^[ \\t/*]*Theme Name\\s*:"}, {"glob": "*.php", "regex": "add_action\\(\\s*['\"]wp_ajax_"}]}, "endpoints": [
    {"m": "GET,POST", "p": "/wp-login.php", "tags": ["auth-flow"], "c": "high"},
    {"m": "GET", "p": "/wp-admin/", "tags": ["admin"], "c": "high"},
    {"m": "GET,POST", "p": "/wp-admin/admin-ajax.php", "c": "high", "note": "wp_ajax_* / wp_ajax_nopriv_* フックの入口（?action=）"},

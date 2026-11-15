@@ -171,10 +171,12 @@ def request_template(it: dict) -> str:
     by = lambda where: [p for p in ps if p.get("in") == where]  # noqa: E731
     method = str(it.get("method", "") or "GET").upper()
     method = "GET" if method in ("ANY", "") else method
-    url = (f"https://{it['host']}" if it.get("host") else "{{base}}") + str(it.get("path", ""))
-    q = [p for p in by("query") if p["name"] != "*"]
+    path = str(it.get("path", "")).split("#", 1)[0]  # `#` 以降は識別のための表記で、送信しない
+    url = (f"https://{it['host']}" if it.get("host") else "{{base}}") + path
+    fixed = {kv.split("=", 1)[0].lower() for kv in path.partition("?")[2].split("&") if kv}  # パスに書かれた固定値のクエリ
+    q = [p for p in by("query") if p["name"] != "*" and str(p["name"]).lower() not in fixed]
     if q:
-        url += "?" + "&".join(f"{p['name']}={{{{{p['name']}}}}}" for p in q)
+        url += ("&" if "?" in path else "?") + "&".join(f"{p['name']}={{{{{p['name']}}}}}" for p in q)
     lines = [f"# {p.get('in', '')}: {squash(p['name'])[:120]}" for p in described] + [f"{method} {url}"]
     lines += [f"{p['name']}: {{{{{p['name']}}}}}" for p in by("header")]
     if by("cookie"):

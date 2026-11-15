@@ -149,7 +149,8 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 | 外部の宛先から返ってくる応答の取り込み | `event` | 空 | `inbound:宛先の役割-response`（`outbound:宛先の役割` と対にする） | `inbound:shortener-response` |
 | ブラウザ・端末側で利用者や他のページから入るもの（ドラッグ＆ドロップ、貼り付け、ファイル選択、保存領域、`postMessage`） | `file-input`（ファイル）/ `ipc`（それ以外） | 空 | `browser:イベントや領域`。語は次から選ぶ: `drop` `paste` `file-select`（ファイル選択。`change` と書かない）`postMessage` `hashchange` `popstate` `location.search` `location.hash` `localStorage(キー)` `sessionStorage(キー)` `cookie(名前)`。同じ種類が複数の画面・スクリプトにあれば `@スクリプト名`（**拡張子なし**）を付ける | `browser:drop`、`browser:paste@editor`、`browser:localStorage(theme)` |
 | 配置の形（何がどこに置かれるか） | `other` | 空 | `deploy:形` | `deploy:release-archive`、`deploy:git-clone`、`deploy:docker-image` |
-| 1 つのパスで、クエリや本文の値によって操作が変わる API（Fever、JSON-RPC、`?action=` 型） | URL の入口 1 件（`http`）＋ 操作ごとに `rpc` | 入口は実際のメソッド。操作は空 | 入口はパス。操作は `名前:操作`。根拠の 1 件目は、その操作に振り分けている行 | `ANY /fever/` と `fever:groups`、`fever:mark` |
+| クエリの**固定値**で画面・処理の登録先が決まる URL（WordPress の `admin.php?page=<slug>`・`admin-ajax.php?action=<名前>`、`index.php?controller=…&action=…` 型。登録先ごとに別のハンドラ・別の権限確認がある） | `http` / `page`（登録先ごとに 1 件） | 実際のメソッド | パスに固定値のクエリを書く（`?page=settings`）。統合は、値が固定のクエリ（英数字と `_.-` だけの値）を識別子に含めて照合し、値が変数（`{id}` など）のクエリは捨てる | `GET /wp-admin/admin.php?page=myplugin-settings`、`POST /wp-admin/admin-ajax.php?action=myplugin_save` |
+| 1 つのパスで、クエリや本文の値によって操作が変わる API（Fever、JSON-RPC、同じ画面への POST を本文のボタン名で振り分けるフォーム） | URL の入口 1 件（`http`）＋ 操作ごとに `rpc` | 入口は実際のメソッド。操作は空 | 入口はパス。操作は `名前:操作`。根拠の 1 件目は、その操作に振り分けている行 | `ANY /fever/` と `fever:groups`、`fever:mark`。WordPress の設定画面なら `POST /wp-admin/admin.php?page=myplugin-settings` と `myplugin-settings:save-options` |
 | 受け口 | `input-channel` | 空 | `種類:仕組み` | `body:json+urlencoded(extended)`、`header:X-Forwarded-*`、`cookie:session(marshal)`、`rsc:server-functions` |
 | 解釈点 | `parser` | 空 | `種類:部品@場所` | `xml:xml2js@routes/import.js`、`deserialize:yaml.load@tasks.py` |
 
@@ -160,8 +161,12 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
   本体以外の項目の `host` に `役割名:ポート` を書いて分ける（`health:9090`、`tracking:5000`）。書かないと、`/` や `/{path*}` が本体の同じパスと 1 件に統合される
 - **`page` は、HTML の画面だけを返す URL**（クライアント側のルート、サーバーが描画する画面）。同じ URL が `Accept` などのヘッダや値によって JSON も返す（API を兼ねる）なら `http` と書き、
   画面から呼ばれる API は `http` の項目の `calls` に書く（サイトマップには、`calls` のある URL の入口も載る）。同じメソッドとパスを `page` と `http` に書き分けると、統合では先に読まれた方の種別が残る
-- **`path` にクエリを書かない。** URL の入口の照合はクエリを無視するので、`/x?a=1` と `/x` は 1 件に統合される。クエリの値で操作が変わるなら、URL の入口の `params` と操作（`rpc`）に書く。
-  どのパスにも効くクエリやヘッダの合図で別の仕組みが動くもの（デバッガの起動、別の動作モード）は、kind `other` で `debug:仕組みの名前` のように書く（`merge.md` に「クエリ付きで書かれた識別子」として出る）
+- **`path` に書いてよいクエリは、登録先を決める固定値だけ。** 統合の照合は、値が固定のクエリ（`?page=settings`。値が英数字と `_.-` だけ）を識別子に含め、それ以外のクエリ（`?id={id}`、`?q=`）は捨てる。
+  - フレームワークがクエリの値で**別々に登録されたハンドラ**へ振り分ける（WordPress の `add_menu_page` / `add_submenu_page` の slug → `admin.php?page=`、`wp_ajax_<名前>` → `admin-ajax.php?action=`、`admin_post_<名前>` → `admin-post.php?action=`）なら、登録先ごとに `path` に固定値のクエリを書いて 1 件ずつにする。
+    書かないと、別々のハンドラ（別々の権限確認）が 1 件に統合される
+  - 1 つのハンドラの中でクエリや本文の値を見て分岐する（`switch ($_GET['op'])`、同じ画面への POST をボタン名で振り分ける）なら、`path` にクエリを書かず、URL の入口の `params` と操作（`rpc`）に書く
+  - 例の値（`?id=1`、`?q=test`）を `path` に書かない（固定値として別件になる）
+  - どのパスにも効くクエリやヘッダの合図で別の仕組みが動くもの（デバッガの起動、別の動作モード）は、kind `other` で `debug:仕組みの名前` のように書く（`merge.md` に「クエリ付きで書かれた識別子」として出る）
 - **ルーターの登録の読み方は、そのルーターの規則に従う。** メソッドを書かない登録は `ANY`。配下すべてを受ける登録（Go の ServeMux の末尾 `/`、Express の `app.use('/x')`、`/*`）は `/x/{path*}` と書く
   （`/x/` と `/x/{path*}` を人によって書き分けない）。完全一致の指定（ServeMux の `{$}`）は末尾なしのパスで書く
 - **外向きの宛先（`outbound:`）** の名前は、連携先や役割の名前 1 語（`outbound:apprise`、`outbound:webhook-delivery`）。根拠の 1 件目は、**実際に送信する行**（HTTP クライアントの呼び出し）。

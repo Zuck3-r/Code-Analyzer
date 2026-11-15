@@ -263,7 +263,7 @@ def implicit_gaps(matched: dict, rows: list[dict], dismissed: set) -> tuple[list
         skey = str(r.get("source", "")).lower()
         for p in (r.get("path"), r.get("internal_path")):
             if p:
-                paths[skey].append(norm_path(str(p)))
+                paths[skey].append(norm_path(str(p)).split("?", 1)[0])  # 知識ベースのエンドポイントはクエリなしで書かれている
         named[skey].update(str(x).lower() for x in [*as_list(r.get("kb")), *as_list(r.get("tags"))])
         port_blobs[skey] += f"\n{r.get('path', '')} {r.get('host', '')}"
         implicit = str(r.get("origin", "")).lower() == "implicit"

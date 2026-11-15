@@ -168,8 +168,28 @@ def clean_host(text) -> tuple[str, list[str], str]:
     return host, others, (raw if leftover else "")
 
 
+_ROUTE_VALUE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+def route_query(path: str) -> str:
+    """パスに書かれたクエリのうち、値が固定のもの（`?page=settings`、`?action=upload`）だけを `k=v` で並べ替えて返す。
+
+    クエリの値で画面や処理が決まるアプリ（WordPress の `admin.php?page=`・`admin-ajax.php?action=`、`index.php?controller=` など）では、
+    固定値のクエリが入口の識別子の一部になる。値が変数（`{id}`、`:id`、`<id>`、空、`*`）のクエリは書き方の揺れとして捨てる。
+    """
+    q = str(path or "").split("#", 1)[0].partition("?")[2]
+    pairs = []
+    for part in q.split("&"):
+        k, eq, v = part.partition("=")
+        k, v = k.strip(), v.strip()
+        if k and eq and _ROUTE_VALUE.match(v) and _ROUTE_VALUE.match(k):
+            pairs.append(f"{k.lower()}={v.lower()}")
+    return "&".join(sorted(set(pairs)))
+
+
 def norm_path(path: str) -> str:
     p = split_host(path)[1]
+    rq = route_query(p)
     p = p.split("?", 1)[0]
     p = re.sub(r"\{[^{}]*\*\}", "{*}", p)
     p = re.sub(r"\{[^{}*]*\}", "{}", p)
@@ -178,7 +198,7 @@ def norm_path(path: str) -> str:
     p = re.sub(r"/{2,}", "/", p)
     if len(p) > 1:
         p = p.rstrip("/")
-    return p.lower()
+    return p.lower() + (f"?{rq}" if rq else "")
 
 
 def curly_path(path: str) -> str:
