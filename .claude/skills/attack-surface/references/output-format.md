@@ -73,7 +73,7 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 | `confidence` | ○ | `high`（定義を直接読んだ） `medium`（規約・推定を含む。パスの一部が未確定など） `low`（存在する可能性がある程度） |
 | `notes` | | 診断員への補足。未確定なら **何を確かめれば確定するか** |
 | `priority` / `priority_reason` | | **既定では付けない。** ユーザーが人の診断計画のために求めたときだけ付ける。`attack-surface.json` にだけ入る |
-| `found_by` | ○ | `pass1:u003` `pass2:implicit` のように。統合時は複数を `+` でつなぐ |
+| `found_by` | ○ | `pass1:u003` `pass2:implicit` のように。統合時は複数を `+` でつなぐ。取りまとめ役が自分で足した項目は `pass1:lead`、以前の実行から持ち込んだ項目は `carryover:実行名`（`compare_runs.py` が付ける） |
 | `kb` | | `knowledge.md`（知識ベースの抜粋）を手がかりに載せた項目は、その見出しの ID（`next-auth`、`django-admin`）。言及漏れの機械検査がこれを見る |
 | `key` `also_hosts` `internal_path` | | 統合スクリプトが付ける（自分では書かない）。`key` は統合後の項目を指す短い鍵、`also_hosts` は同じ定義が公開されているほかのホスト、`internal_path` は公開パスに付け替える前のソース内のパス |
 
@@ -128,7 +128,7 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 | 対象 | `kind` | `method` | `path` の書き方 | 例 |
 |---|---|---|---|---|
 | HTTP のルート、画面、Webhook の受け口 | `http` / `page` | 実際のメソッド | ソース内のパス。Webhook も `http`（タグ `webhook`） | `POST /webhooks/stripe` |
-| 静的配信、転送 | `static` / `proxy` | `GET` / `ANY` | 配下すべては `{path*}` | `ANY /legacy/{path*}` |
+| 静的配信、転送 | `static` / `proxy` | `GET` / `ANY` | 配下すべては `{path*}`。公開ディレクトリの静的配信をどの単位で 1 件にするかは、下の「数え方が割れやすいもの」 | `ANY /legacy/{path*}`、`GET /js/{path*}`、`GET /composer.json` |
 | WebSocket の接続口 / イベント | `websocket` | `WS` | `接続パス` / `接続パス#イベント名` | `/socket.io/#chat:send` |
 | GraphQL のフィールド | `graphql` | `QUERY` `MUTATION` `SUBSCRIPTION` | フィールド名のみ | `deleteUser` |
 | gRPC | `grpc` | `GRPC` | `/パッケージ.サービス/メソッド` | `/billing.v1.Invoices/Void` |
@@ -138,16 +138,16 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 | 公開ポート | `port` | 空 | `ポート番号/tcp`（公開側の番号）。サービス名は `host` に | `5432/tcp`, host `db` |
 | ホスト名 | `host` | 空 | ホスト名だけ（スキーム・ポート・パスなし） | `stg-shop.example.co.jp` |
 | クラウドのリソース | `cloud` | 空 | `種類:名前` | `bucket:uploads-prod` |
-| 管理コマンド | `cli` | 空 | コマンド名 | `manage.py loaddata` |
+| 管理コマンド、タスクの定義 | `cli` | 空 | リポジトリ内のスクリプトは、**ソースのルートからのパス**（置き場所を省かない。拡張子はファイル名のとおり）とサブコマンド。`Makefile` のターゲットは `make ターゲット名`、依存定義の `scripts` は `npm run 名前`・`composer 名前`。**ターゲットごとに 1 件** | `bin/administration`、`manage.py loaddata`、`make test`、`npm run build` |
 | 資格情報の所在 | `other` | 空 | `secret:変数名や種類`（値は書かない） | `secret:DATABASE_URL` |
 | 独自プロトコルのコマンド（SMTP、IMAP、独自の TCP プロトコルなど） | `protocol` | プロトコル名（`SMTP`） | `プロトコル名:コマンド`。受け付けるポートは別に `port` で書く | `smtp:RCPT TO`、`smtp:AUTH PLAIN` |
 | このコードが呼び出す外部の宛先 | `other` | 空 | `outbound:宛先の役割`（宛先が入力で決まるものは、解釈点 `url:` にも書く） | `outbound:webhook-delivery`、`outbound:dns-resolver` |
 | 外部から届くデータの取り込み（受信メール、外部 API の応答、ファイルの監視） | `event` | 空 | `inbound:種類` | `inbound:bounce-mail`、`inbound:dns-response` |
 | 設定の読み込み口（外から変えられる設定） | `other` | 空 | `config:読み込み元` | `config:env+postal.yml` |
-| CI のワークフロー（外部の契機で動くジョブ定義） | `event` | `TRIGGER` | `基盤の略称:定義ファイル名:主な契機`（GitHub Actions は `gha:`、GitLab CI は `gitlab-ci:`）。**定義ファイルごとに 1 件** | `gha:deploy.yml:push`、`gha:tests.yml:pull_request` |
+| CI のワークフロー（外部の契機で動くジョブ定義） | `event` | `TRIGGER` | `基盤の略称:定義ファイル名`（GitHub Actions は `gha:`、GitLab CI は `gitlab-ci:`）。**定義ファイルごとに 1 件**。契機は識別子に入れず、全部を `summary` に書く（契機が複数あると、どれを書くかで識別子が割れる） | `gha:deploy.yml`、`gha:tests.yml` |
 | リポジトリを読み書きする外部サービス（依存の自動更新、翻訳の同期、コード解析など） | `event` | `TRIGGER`（契機で動くもの）/ 空（届くデータ） | `サービス名:役割や契機` / `inbound:サービス名-届くもの` | `dependabot:npm`、`inbound:crowdin-translations` |
 | 外部の宛先から返ってくる応答の取り込み | `event` | 空 | `inbound:宛先の役割-response`（`outbound:宛先の役割` と対にする） | `inbound:shortener-response` |
-| ブラウザ・端末側で利用者や他のページから入るもの（ドラッグ＆ドロップ、貼り付け、ファイル選択、保存領域、`postMessage`） | `file-input`（ファイル）/ `ipc`（それ以外） | 空 | `browser:イベントや領域`。同じ種類が複数の画面・スクリプトにあれば `@スクリプト名` を付ける | `browser:drop`、`browser:paste@editor`、`browser:localStorage(theme)` |
+| ブラウザ・端末側で利用者や他のページから入るもの（ドラッグ＆ドロップ、貼り付け、ファイル選択、保存領域、`postMessage`） | `file-input`（ファイル）/ `ipc`（それ以外） | 空 | `browser:イベントや領域`。語は次から選ぶ: `drop` `paste` `file-select`（ファイル選択。`change` と書かない）`postMessage` `hashchange` `popstate` `location.search` `location.hash` `localStorage(キー)` `sessionStorage(キー)` `cookie(名前)`。同じ種類が複数の画面・スクリプトにあれば `@スクリプト名`（**拡張子なし**）を付ける | `browser:drop`、`browser:paste@editor`、`browser:localStorage(theme)` |
 | 配置の形（何がどこに置かれるか） | `other` | 空 | `deploy:形` | `deploy:release-archive`、`deploy:git-clone`、`deploy:docker-image` |
 | 1 つのパスで、クエリや本文の値によって操作が変わる API（Fever、JSON-RPC、`?action=` 型） | URL の入口 1 件（`http`）＋ 操作ごとに `rpc` | 入口は実際のメソッド。操作は空 | 入口はパス。操作は `名前:操作`。根拠の 1 件目は、その操作に振り分けている行 | `ANY /fever/` と `fever:groups`、`fever:mark` |
 | 受け口 | `input-channel` | 空 | `種類:仕組み` | `body:json+urlencoded(extended)`、`header:X-Forwarded-*`、`cookie:session(marshal)`、`rsc:server-functions` |
@@ -178,6 +178,10 @@ JSON Lines。1 行に 1 件、UTF-8。パス 1・パス 2・最終版（`final.f
 - 解釈点の `fed_by` は、**届く入口の `method` と `path` を、その入口の項目と同じ書き方で**書く（`POST /api/v1/send/message`、`smtp:DATA`、`thumbnails`）。
   説明を足さない（「〜のルート（担当外）」のように書くと結べない）。同じ書き方なら統合時に入口へ自動で結ばれ、入口の `reaches` も埋まる。
   入口が特定できないときは `["不明"]` と `REACH_UNKNOWN`
+- `fed_by` に書くのは、**上の表の書き方で書いた入口の識別子**。URL の入口は「メソッド パス」、1 つの URL に操作が集まる API は操作の識別子（`fever:mark`）、
+  管理コマンドはソースのルートからのパス（`bin/administration`。`administration` と略さない）、ブラウザ側の入口は `browser:…`（`@スクリプト名` に拡張子を付けない）、
+  CI は `gha:定義ファイル名`。関数名・ファイル名・Cookie やヘッダーの名前だけを書かない（Cookie やヘッダーは受け口であって入口ではない。それを運ぶリクエストの入口を書く）。
+  統合は、スクリプトの拡張子や置き場所の有無、後ろに足した補足だけが違う書き方を、入口が 1 つに決まるときに限って結ぶ（結んだものは `merge.md` に出る）。それ以外は人が直す
 
 ### 受け口か解釈点か（同じ仕組みを両方に書かない）
 
@@ -197,7 +201,8 @@ URL・ポート・イベント名を持つものはまず「入口」に書き�
 
 ### 補助ファイル（統合のときに判断を反映する）
 
-`RUN/work/` に置く。どれも 1 行 1 件の JSON で、無ければ何もしない。`consolidate.py` と `check.py --diff` が読む。
+`RUN/work/` に置く。どれも 1 行 1 件の JSON で、無ければ何もしない。`aliases.jsonl` `prefixes.jsonl` `overrides.jsonl` は `consolidate.py` と `check.py --diff` が、
+`compare.jsonl` は `compare_runs.py` が読む。
 
 ```json
 {"source": "portal-web", "from": {"path": "/#server-action:deleteAccount"}, "to": {"kind": "rpc", "method": "POST", "path": "server-action:deleteAccount"}}
@@ -229,6 +234,22 @@ URL・ポート・イベント名を持つものはまず「入口」に書き�
 - `key` は統合後の各項目に振られる短い鍵（`merged.findings.jsonl` の `key`）。識別子（受け口・解釈点は根拠の位置）が変わると鍵も変わるので、
   `aliases.jsonl` を直した後は `merge.md` の「当たらなかった行」を確かめる
 - どの項目にも当たらなかった行と、知らない条件を書いた行は `merge.md` に出る
+
+```json
+{"old": "3f9a1c2e", "new": "a72352b3"}
+{"old": "config:legacy-loader", "skip": "今回の config:env+app.yml の項目に含まれる"}
+{"old": "8a75eb0f", "carry": "tst/MigrateTest.php 70 行の exec を開いて確かめた。今回の一覧に無い"}
+```
+
+`compare.jsonl` — 同じ入力に対する以前の実行があるときだけ使う。`compare_runs.py` が読む。以前の実行にしか無い項目 1 件ごとの判断を書く。
+`old` は以前の実行の項目、`new` は今回の項目で、どちらも `key` か識別子（`path`）で指す。
+
+- `{"old": …, "new": …}` … 書き方や根拠の行が違うだけで、今回の項目と同じ対象。持ち込まない
+- `{"old": …, "new": …, "same": false}` … 自動で対応づけられたが、読んでみたら別の対象だった
+- `{"old": …, "skip": "理由"}` … 持ち込まない（今回の別の項目に含まれる、今の入力では成り立たない、誤りだった）
+- `{"old": …, "carry": "確かめたこと"}` … 根拠を確かめたうえで持ち込む
+- 何も書かなかった項目は持ち込まれる（取りこぼしを避ける側に倒してある）。ただし、今回も同じ箇所を根拠にする項目があるものは、
+  同じ対象の書き方違いの見込みが高いので、判断を書かずに持ち込まない（`compare.md` に「未判断」と出る）
 
 ### 認証欄の付け方
 
@@ -264,10 +285,18 @@ URL・ポート・イベント名を持つものはまず「入口」に書き�
   コードに登録の無い資源を、既定で在りそうだからと足さない（足すなら `confidence: low` で、根拠に何を見て推定したかを書く）
 - **共通の画面**（ログイン、ログアウト、パスワード変更など）は 1 回だけ
 - **書式違いの別名**（`.json` サフィックス、末尾スラッシュの有無）は別件にせず、`notes` に書く
+- **公開ディレクトリの静的配信**（リポジトリの一部が、そのまま Web サーバーの公開ディレクトリになる構成）: 公開ディレクトリ**直下のディレクトリごとに 1 件**
+  （`GET /ディレクトリ名/{path*}`。ドットで始まるディレクトリも同じ）、**直下のファイルごとに 1 件**（`GET /ファイル名`。サーバーが実行するスクリプトは `http` で書く）。
+  ディレクトリの中の個別のファイルは別件にせず、ディレクトリの項目の `notes` に、中にある物の種類を書く。中のファイルを別件にするのは次の 2 つだけ:
+  サーバーの設定がそのファイルだけを別扱いにしている（個別の遮断・許可・実行）、リポジトリには無く動作中やテストで作られる（バックアップ、アップロード先、生成物）。
+  配置の形によっては置かれないもの（`export-ignore` で除かれるものなど）も載せ、どの形で置かれるかを `notes` に書く
+- **タスクの定義**（`Makefile`、依存定義の `scripts`、タスクランナーの設定）: ターゲットごとに 1 件（`cli`）。パス 1 の読み手も、パス 2 の探し手も同じ単位で書く
 
 **重複の扱い**（統合は `consolidate.py` が行う）: URL で表せる入口は、同じ `source`・メソッド・パスを 1 件にする
 （`host` が両方に書いてあって食い違うときは、根拠 1 件目が同じ箇所なら同じ定義とみなして 1 件にし、違う箇所なら別件にする）。
-受け口・解釈点は、根拠 1 件目が同じ箇所（同じ行か同じ引用）を指し、識別子の `種類:` が食い違わないものを 1 件にする。それ以外の種別は、識別子が同じか、根拠 1 件目が同じ箇所で識別子に共通の語があるものを 1 件にする
+受け口・解釈点は、根拠 1 件目が同じ箇所（同じ行か、3 行以内にある同じ引用）を指し、識別子の `種類:` が食い違わないものを 1 件にする
+（同じ文の行が離れた場所に何度も出てくるファイルでは、引用が同じでも行が離れていれば別の箇所として扱う。行番号を正しく書くことが、別件として残す条件になる）。
+それ以外の種別は、識別子が同じか、根拠 1 件目が同じ箇所で識別子に共通の語があるものを 1 件にする
 （向きや性質の接頭辞 `outbound:` `inbound:` `secret:` が食い違うものは、同じ箇所を根拠にしていても別件のまま。接頭辞の語そのものは共通の語に数えない）。
 根拠・タグ・`found_by`・`fed_by`・`reaches` は合算し、確度は高い方を採る。`summary` と `auth_evidence` は先に読んだ行のものを採る。`notes` は言い換えを除いて 3 件・600 字まで
 （それ以上は捨てる。元の記録はパスごとのファイルに残る）。`auth` は証拠のある判断を採り、`required` と `none` が食い違ったら両方の根拠を残して `AUTH_CONFLICT` を付ける（人が決める）。
@@ -339,7 +368,7 @@ JSON Lines。ユニットに含まれる **全ファイル** について 1 行�
 | `requests.http` | `build_output.py` | HTTP で送れる入口ごとの、リクエストのひな形（REST Client 形式）。項目名と場所はコードから読めたもの、値は仮 |
 | `attack-surface.json` | `build_output.py` | 全項目の機械可読データ |
 | `stats.json` | `build_output.py` | 件数の集計（報告書の数字はここから引く） |
-| `work/` | 各手順 | 中間物一式（再開・検証用）。`knowledge.md`（知識ベースの抜粋）、検査結果は `work/check/`（`report.md` 穴の検出とパス間の突き合わせ、`merge.md` 統合、`overrides.todo.jsonl` 優先度のひな形（優先度を付ける場合のみ）、`verify.md` 最終照合） |
+| `work/` | 各手順 | 中間物一式（再開・検証用）。`knowledge.md`（知識ベースの抜粋）、検査結果は `work/check/`（`report.md` 穴の検出とパス間の突き合わせ、`merge.md` 統合、`overrides.todo.jsonl` 優先度のひな形（優先度を付ける場合のみ）、`verify.md` 最終照合、`compare.md` 以前の実行との突き合わせ（以前の実行がある場合のみ））。以前の実行から持ち込んだ項目は `work/carryover/` |
 
 **成果物に載せるのは観察した事実だけ。** Excel・CSV・Markdown には、優先度・優先度の理由・確度・発見元を載せない（後段の診断の視野を狭め、読む量を増やすため）。
 確度の代わりに由来（コードの定義 / 設定 / フレームワーク等が生やす / 推定 など）を載せる。備考（観察と未検証の仮説）は Excel では別シート「調査メモ」に分け、CSV・Markdown には載せない。
@@ -347,6 +376,7 @@ JSON Lines。ユニットに含まれる **全ファイル** について 1 行�
 
 `stats.json` の `by_pass`（どのパスが見つけたか）は、パス 2 以降だけが見つけたものを「定義あり（パス 1 の取りこぼし）」と「暗黙の仕組み（パス 1 の対象外）」に分けて数える。
 パス 1 は暗黙の仕組みを挙げない決まりなので、後者を取りこぼしとして報告しない。
+以前の実行から持ち込んだだけの項目（今回の読み手・探し手は挙げていないもの）は「以前の実行からの持ち込み」として別に数える。
 
 `build_output.py` は出力フォルダの親に `LATEST.txt`（最新の実行フォルダ名）も書く。
 
@@ -422,6 +452,12 @@ JSON Lines。ユニットに含まれる **全ファイル** について 1 行�
 ## パスごとの結果
  - パス 1 の件数、パス 2 で新規に見つかった件数と内訳、追加パスの有無
  - 収束の判断（新規が出なくなったか。未収束の範囲があればどこか）
+
+## 以前の実行との突き合わせ（同じ入力の以前の実行があるときだけ）
+ - 比べた実行、入力が同じだったか、対応が付いた件数（`work/check/compare.md` から）
+ - 今回にしか無い項目と、以前の実行にしか無い項目の件数。それぞれ、相手がどの項目も根拠にしていなかった箇所のものが何件か
+ - 以前の実行から持ち込んだ項目の一覧（ID、識別子、根拠）と、持ち込まなかった項目とその理由（`work/compare.jsonl` から）
+ - 1 回の実行では出切らなかった、という事実と、その範囲（どの種類・どの場所に片方だけの項目が集まったか）
 
 ## 受け口と解釈点の網羅状況
  - ソースごとに、受け口の棚卸しをしたか（リクエスト処理の共通部分をどこまで読めたか）

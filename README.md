@@ -110,7 +110,7 @@ Input/
 | 3. 穴の検出 | 読み残し、検出ゼロなのに怪しいファイル、知識ベースとの照合漏れ、根拠の不一致を洗う | `check.py RUN` | `check/report.md` |
 | 4. パス 2 | パス 1 の結果を見せずに、観点別（暗黙の口、認証の境界、受け口、解釈点など 11 種）で探し直し、突き合わせる | `check.py RUN --diff` | `pass2/` |
 | 5. 突き合わせ | 外から見えるパスを決め、3 層をつなぎ、ソース間の関係を整理する | — | `relations.md` |
-| 6. 統合と検証 | 重複を 1 件にまとめ、全項目の根拠を照合する | `consolidate.py RUN --final` → `check.py RUN --verify` | `final.findings.jsonl` `check/verify.md` |
+| 6. 統合と検証 | 重複を 1 件にまとめ、全項目の根拠を照合する。同じ入力の以前の実行が残っていれば、項目単位で突き合わせ、以前にしか無い項目を確かめて持ち込む | `consolidate.py RUN --final` → `check.py RUN --verify`（以前の実行があれば、その前に `compare_runs.py RUN`） | `final.findings.jsonl` `check/verify.md` `check/compare.md` |
 | 7. 出力 | 一覧を生成し、報告書を書く | `build_output.py RUN` | `REPORT.md` `targets.csv` ほか |
 
 パス 2 で新しいものが多く出た範囲は、切り口を変えてもう一度掘ります（合計 3 回まで）。

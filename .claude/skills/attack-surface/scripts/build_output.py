@@ -252,7 +252,7 @@ def main() -> int:
         if p1:
             return "パス1とパス2以降の両方" if later else "パス1のみ"
         if not later:
-            return "その他"
+            return "以前の実行からの持ち込み" if "carryover:" in fb else "その他"
         # パス 1 は暗黙の仕組みを挙げない決まりなので、取りこぼしと呼べるのは定義のあるものだけ
         return "パス2以降のみ（暗黙の仕組み。パス1の対象外）" if str(it.get("origin", "")).lower() == "implicit" else "パス2以降のみ（定義あり。パス1の取りこぼし）"
 

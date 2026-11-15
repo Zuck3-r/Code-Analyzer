@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """パス 1・パス 2 の検出項目を 1 つにまとめる。解析はしない。
 
-  1. work/pass*/ の全 findings を読む
+  1. work/pass*/ の全 findings を読む（work/carryover/ があれば、以前の実行から持ち込む項目として続けて読む）
   2. work/aliases.jsonl（任意）: 書き方違いの寄せ直しと、誤りの取り下げ
   3. work/prefixes.jsonl（任意）: ソース内のパスを、外から見える公開パスに直す
   4. 同じ対象を 1 件に統合する（URL で表せる入口はメソッドとパス、それ以外は識別子か根拠の位置で照合）
   5. origin が implicit の項目に IMPLICIT を付け、各項目に短い鍵 (key) を振る
   6. work/overrides.jsonl（任意）: フラグ・認証・届く入口などの上書きと追記
+     その後、解釈点の fed_by を入口の項目に結ぶ（同じ書き方のもの。拡張子や置き場所の有無、後ろに足した補足だけが違うものは、入口が 1 つに決まるときだけ結ぶ）
   7. work/merged.findings.jsonl に書く（--final を付けると work/final.findings.jsonl にも書く）
   8. work/check/merge.md に、何をどうまとめたかを書く（優先度を付ける場合は、未設定の項目のひな形を work/check/overrides.todo.jsonl に出す）
 
@@ -55,6 +56,15 @@ def label(it: dict) -> str:
     return f"{kind_of(it)} {it.get('method', '') or ''} {it.get('path', '')}".replace("  ", " ").strip()
 
 
+_FED_EXT = re.compile(r"\.(?:js|mjs|cjs|ts|jsx|tsx|vue|php|py|rb|go|sh|bash|pl|java|kt|cs|ya?ml|json)$")
+_FED_SEP = re.compile(r"[\s:#@(（\[]")
+
+
+def _loose_name(s: str) -> str:
+    """fed_by と入口の識別子を比べるための形（小文字、空白を 1 つに、末尾のスクリプトの拡張子を落とす）。"""
+    return _FED_EXT.sub("", re.sub(r"\s+", " ", str(s or "")).strip().lower())
+
+
 def main() -> int:
     utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -69,7 +79,9 @@ def main() -> int:
     rows: list[dict] = []
     per_file: dict[str, int] = {}
     errors: list[str] = []
-    for d in sorted(p for p in work.iterdir() if p.is_dir() and re.fullmatch(r"pass\d+", p.name)):
+    # work/carryover/ は、以前の実行から持ち込む項目（compare_runs.py --carry が書く）。パスの成果物の後に読む（先に読んだ行の書き方が採用されるため）
+    for d in sorted((p for p in work.iterdir() if p.is_dir() and (re.fullmatch(r"pass\d+", p.name) or p.name == "carryover")),
+                    key=lambda p: (p.name == "carryover", p.name)):
         for fpath in sorted(d.rglob("*.findings.jsonl")):
             got, errs = load_jsonl(fpath)
             per_file[f"{d.name}/{fpath.name}"] = len(got)
@@ -130,16 +142,43 @@ def main() -> int:
     # ---- 解釈点の fed_by を入口に結び、入口の reaches を逆引きで埋める
     entry_by_url: dict[tuple, dict] = {}
     entry_by_name: dict[str, dict] = {}
+    entry_spelled: dict[str, dict] = {}                         # 入口の書き方（URL は「メソッド パス」）→ 入口
+    entry_loose: dict[str, list[dict]] = defaultdict(list)      # 拡張子と置き場所を落とした名前 → 入口（URL 以外）
     for it in items:
         if layer_of(it) != "入口":
             continue
         for p in (it.get("path"), it.get("internal_path")):
             if not p:
                 continue
+            name = re.sub(r"\s+", " ", str(p)).strip().lower()
             if is_url_item(it):
                 entry_by_url[(str(it.get("method", "") or "").upper(), norm_path(str(p)))] = it
-            entry_by_name[re.sub(r"\s+", " ", str(p)).strip().lower()] = it
+                entry_spelled[f"{str(it.get('method', '') or '').lower()} {name}".strip()] = it
+            else:
+                entry_spelled[name] = it
+                for k in {_loose_name(name), _loose_name(name.rsplit("/", 1)[-1])}:
+                    if k and all(x is not it for x in entry_loose[k]):
+                        entry_loose[k].append(it)
+            entry_by_name[name] = it
+
+    def loose_entry(s: str) -> dict | None:
+        """書き方が少し違う fed_by を、入口が 1 つに決まるときだけ結ぶ。決まらなければ None（人が直す）。"""
+        k = _loose_name(s)
+        cands = entry_loose.get(k, [])
+        if len(cands) == 1:  # スクリプトの拡張子や置き場所の有無だけが違う（`administration` と `bin/administration`、`@splitview.js` と `@splitview`）
+            return cands[0]
+        # 入口の書き方の後ろに補足を足したもの（`gha:ci.yml:push`、`bin/tool（管理用）`、`GET /x（担当外）`）。いちばん長く一致する入口が 1 つのときだけ
+        low = re.sub(r"\s+", " ", s).strip().lower()
+        hits = [(len(n), it) for n, it in entry_spelled.items() if len(n) >= 4 and len(low) > len(n) and low.startswith(n) and _FED_SEP.match(low[len(n)])]
+        if hits:
+            top = max(n for n, _it in hits)
+            best = {id(it): it for n, it in hits if n == top}
+            if len(best) == 1:
+                return next(iter(best.values()))
+        return None
+
     fed_unmatched: Counter = Counter()
+    fed_loose: dict[str, str] = {}
     fed_linked = 0
     for it in items:
         if kind_of(it) != "parser":
@@ -156,6 +195,10 @@ def main() -> int:
                 hit = next((v for (mm, pp), v in entry_by_url.items() if pp == norm_path(s)), None)
             if hit is None and p:
                 hit = entry_by_name.get(p.lower())
+            if hit is None:
+                hit = loose_entry(s)
+                if hit is not None:
+                    fed_loose[s] = label(hit)
             if hit is None:
                 fed_unmatched[s] += 1
                 continue
@@ -344,6 +387,12 @@ def main() -> int:
         md += [f"| `{s[:110]}` | {n} |" for s, n in fed_unmatched.most_common(80)]
         if len(fed_unmatched) > 80:
             md.append(f"| … ほか {len(fed_unmatched) - 80} 通り | |")
+        md.append("")
+    if fed_loose:
+        md += [f"### 書き方が少し違ったが、入口が 1 つに決まったので結んだもの: {len(fed_loose)} 通り", "",
+               "スクリプトの拡張子や置き場所の有無だけが違うもの、入口の書き方の後ろに補足を足したもの。違う入口に結ばれていたら、`overrides.jsonl` の `replace_fed_by` で正しい書き方に直す。", "",
+               "| fed_by の書き方 | 結んだ入口 |", "|---|---|"]
+        md += [f"| `{s[:90]}` | `{to[:90]}` |" for s, to in sorted(fed_loose.items())[:80]]
         md.append("")
 
     multi_host = [it for it in items if it.get("also_hosts")]

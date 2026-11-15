@@ -220,16 +220,21 @@ def anchor(f: dict) -> tuple | None:
     return (str(f.get("source", "")).strip().lower(), kind, file, line, quote)
 
 
+SAME_QUOTE_WINDOW = 3  # 引用が同じでも、これより離れた行は別の箇所（check.py が根拠を照合する幅と同じ）
+
+
 def same_spot(line_a: int, quote_a: str, line_b: int, quote_b: str) -> bool:
     """同じファイル内の 2 つの根拠が同じ箇所を指しているか。
 
-    行が同じ、または引用が同じなら同じ箇所。隣り合う別の行（app.use(a) と app.use(b)）は別の箇所として扱う。
+    行が同じ、または近い行で引用が同じなら同じ箇所。隣り合う別の行（app.use(a) と app.use(b)）は別の箇所として扱う。
+    同じ文の行が離れた場所に何度も出てくるファイル（設定見本の `apikey = "…"`、`return response.json();`）では、
+    引用が同じでも行が離れていれば別の箇所。行番号が書かれていない根拠は、引用だけで比べる。
     """
     if line_a and line_a == line_b:
         return True
     if quote_a and quote_b:
         if quote_a == quote_b:
-            return True
+            return not line_a or not line_b or abs(line_a - line_b) <= SAME_QUOTE_WINDOW
         if abs(line_a - line_b) <= 2 and min(len(quote_a), len(quote_b)) >= 12 and (quote_a in quote_b or quote_b in quote_a):
             return True
     return False
