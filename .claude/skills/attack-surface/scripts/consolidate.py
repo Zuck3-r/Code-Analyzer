@@ -8,7 +8,7 @@
   5. origin が implicit の項目に IMPLICIT を付け、各項目に短い鍵 (key) を振る
   6. work/overrides.jsonl（任意）: フラグ・優先度・認証などの上書きと追記
   7. work/merged.findings.jsonl に書く（--final を付けると work/final.findings.jsonl にも書く）
-  8. work/check/merge.md に、何をどうまとめたかを書く。優先度が未設定の項目は work/check/overrides.todo.jsonl にひな形を出す
+  8. work/check/merge.md に、何をどうまとめたかを書く（優先度を付ける場合は、未設定の項目のひな形を work/check/overrides.todo.jsonl に出す）
 
 補助ファイルの書式（どれも 1 行 1 件の JSON。無ければ何もしない）:
 
@@ -185,7 +185,9 @@ def main() -> int:
     if args.final:
         (work / "final.findings.jsonl").write_text(text, encoding="utf-8")
 
-    todo = [it for it in items if not it.get("priority")]
+    # 優先度付けは任意。1 件でも優先度が付いているとき（付ける運用のとき）だけ、未設定の項目のひな形を出す
+    prioritizing = any(it.get("priority") for it in items)
+    todo = [it for it in items if not it.get("priority")] if prioritizing else []
     todo_path = work / "check" / "overrides.todo.jsonl"
     if todo:
         todo_path.write_text("\n".join(json.dumps(
@@ -216,7 +218,7 @@ def main() -> int:
 
     no_auth = [it for it in items if not it.get("auth")]
     md += ["## 残っている作業", "",
-           f"- 優先度が未設定: {len(todo)} 件" + ("（ひな形: `work/check/overrides.todo.jsonl`。`priority` と `priority_reason` を埋めて `work/overrides.jsonl` に足す。"
+           (f"- 優先度が未設定: {len(todo)} 件" if prioritizing else "- 優先度: 付けていない（任意。成果物には出ない）") + ("（ひな形: `work/check/overrides.todo.jsonl`。`priority` と `priority_reason` を埋めて `work/overrides.jsonl` に足す。"
                                           "まとまった範囲は `path_regex` や `flag` の条件 1 行で書くほうが早い）" if todo else ""),
            f"- 認証欄が空: {len(no_auth)} 件",
            f"- 認証の判断が食い違ったもの (AUTH_CONFLICT): {sum(1 for it in items if 'AUTH_CONFLICT' in as_list(it.get('flags')))} 件（根拠を読み直して `overrides.jsonl` で確定し、フラグを外す）",
