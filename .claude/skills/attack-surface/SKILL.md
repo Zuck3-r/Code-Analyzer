@@ -185,6 +185,8 @@ python .claude/skills/attack-surface/scripts/check.py RUN
 - **入力に現れるホスト名のうち、どの項目にも出てこないもの**（5d）→ コードや設定の行に現れるものは、現れる場所を開いて、接続先・遷移先・取得元・運営する名前ならホスト名として載せる
   （1 ホスト 1 件）。テストの架空の値など、どれにも当たらないと確かめたら `RUN/work/dismissed.jsonl` に `{"source": …, "host": "<名前>", "reason": …}` を書く。
   コメント・文書・ロックファイルの中だけに現れる名前は一覧に名前だけが出る（依存の取得元、バッジの外部サービスなど、連携先の手がかりになるものがあれば載せる）
+- **ファイルごとに 1 件ずつ書く単位のうち、項目の無いもの**（5e。`Makefile` のターゲット、依存定義の `scripts`、CI のワークフローのファイル、リポジトリ直下をそのまま公開しているソースの直下の名前）
+  → **パス 2 の前に潰す。** パス 2 の探し手はこれらを書き直さないので、ここで残ったものは誰も書かない。取りまとめ役が `RUN/work/pass1/lead.findings.jsonl` に足す
 - **証跡の不一致** → 該当ファイルを開き直して行と引用を直す。本当に無ければその項目は誤りなので、`RUN/work/aliases.jsonl` に取り下げを書く（手順 6）
 - **統合で割れやすい書き方** → 直さなくても統合はできるが、パス 2 の依頼文で念を押す材料にする（host 欄の自由記述、`種類:` の無い識別子など）
 
@@ -195,7 +197,7 @@ leads が多いときは、まずこれを読む（全文は各ファイルに�
 ### 4. パス 2 — 観点起点で探し直す
 
 パス 1 とは逆向きに、観点（レンズ）ごとに全ソースを横断して探す。レンズの一覧と探し方は [references/hiding-places.md](references/hiding-places.md)。
-手順 2 で作った `RUN/work/briefs/pass2-<名前>.md` を読ませる（組み分けを変えたいときは `make_briefs.py RUN --groups "entry+authz,intake,…"`）。成果物は `RUN/work/pass2/<名前>.findings.jsonl` と `<名前>.notes.md`。
+手順 2 で作った `RUN/work/briefs/pass2-<名前>.md` を読ませる（組み分けを変えたいときは `make_briefs.py RUN --groups "entry+authz+client,parsers,…"`）。成果物は `RUN/work/pass2/<名前>.findings.jsonl` と `<名前>.notes.md`。
 
 | レンズ | 見るもの |
 |---|---|
@@ -376,12 +378,15 @@ python .claude/skills/attack-surface/scripts/build_output.py RUN
 |---|---|---|
 | （境界の扱い） | 見込みが境界の 1 割以内なら、小さいほうの区分で進めてよい | 同左 |
 | **小**（見込み 6 万トークン未満） | 自分で全部読む。ユニットが複数あっても読み手を立てない | 探し手 3 人: ①入口（`entry` `implicit` `client` `infra` `nonhttp` `leftover` `authz`）②受け口と解釈点（`intake` `parsers`）③前提と自由枠（`assumptions` `open`） |
-| **中**（60 万トークン未満） | ユニットごとに読み手 1 人 | 探し手 6 人: ①`entry` `authz` ②`implicit` `leftover` ③`client` `infra` `nonhttp` ④`intake` ⑤`parsers` ⑥`assumptions` `open` |
+| **中**（60 万トークン未満） | ユニットごとに読み手 1 人 | 探し手 4 人: ①`entry` `authz` `client` ②`implicit` `leftover` `infra` `nonhttp` ③`parsers` ④`intake` `assumptions` `open` |
 | **大** | ユニットごとに読み手 1 人 | レンズごとに 1 人。ソースが大きい場合は、レンズ × ソースに分ける |
 
 - パス 2 は、どの規模でも自分ではなく別のエージェントに頼む（自分の一覧を知っている目では、独立した再走査にならない）。サブエージェントを使えない環境では、
   パス 1 の一覧を見返さずに、まとめたレンズごとに順に行う
-- まとめ方を変えてもよいが、`intake` `parsers` と入口のレンズは混ぜない（見る向きが違うので、まとめると片方が薄くなる）
+- まとめ方を変えてもよいが、`intake` `parsers` と入口のレンズは混ぜない（見る向きが違うので、まとめると片方が薄くなる）。`parsers` は、規模が小のとき以外は単独にする
+  （PrivateBin の 3 回の実走で、その組だけが見つけた項目の大半を出したのが `parsers` だった）
+- 中規模の 4 組は、PrivateBin の 3 回の実走の測定で決めた（6 組のとき、`parsers` 以外の組は項目の 7〜9 割以上がパス 1 と重なり、1 人あたり 6〜7 万字の同じ資料を 6 人が読んでいた）。
+  あわせて、パス 2 はファイルごとに数えられる単位（直下の静的配信、ターゲット、CI のファイル、ホスト名、秘密のキー）を書き直さない。漏れは `check.py` の 5d・5e が挙げる
 - ティア C は流し読みでよい（冒頭と構造を見て、入口にも解釈処理にも関係しないと判断した理由を記録）
 - 途中で文脈が尽きそうなときは、どこまで終えたかを `RUN/work/progress.md` に書く。中間物はすべて `RUN/work/` にあるので、そこから再開できる
 

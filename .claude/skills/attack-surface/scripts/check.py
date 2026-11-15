@@ -10,6 +10,7 @@
        5b 暗黙に存在し得るエンドポイント（implicit-endpoints.json）
        5c 仕様書との照合（入力に OpenAPI / Swagger があるときだけ）
        5d 入力に現れるホスト名のうち、どの検出項目にも出てこないもの
+       5e ファイルごとに 1 件ずつ書く単位（Makefile のターゲット、scripts、CI のワークフロー、公開ディレクトリ直下の名前）のうち、項目の無いもの
   6. 証跡の不一致（ファイルが無い / 行が範囲外 / 引用がその付近に無い）と、形式・記法の不備
   7. 出力に紛れ込んだ秘密情報らしき値
   8. --diff: パス 1 とパス 2 以降の突き合わせ（aliases.jsonl / prefixes.jsonl があれば適用してから比べる）
@@ -212,6 +213,92 @@ def host_gaps(inventory: dict, rows: list[dict], dismissed: set) -> tuple[list[d
     for g in (gaps, notes_only):
         g.sort(key=lambda x: (-len(x["files"]), -x["count"], x["host"]))
     return gaps, notes_only, {"present": len(hosts), "mentioned": mentioned, "dismissed": skipped}
+
+
+# ---- ファイルごとに 1 件ずつ書く単位（パス 2 は書き直さないので、漏れはここで拾う）
+_MAKE_RULE = re.compile(r"^([^\s:#=.$][^:#=]*?)\s*:(?![=:])")
+_CI_WORKFLOW = re.compile(r"(^|/)\.github/workflows/([^/]+\.ya?ml)$")
+
+
+def unit_gaps(inventory: dict, rows: list[dict]) -> list[dict]:
+    """ファイルを読めば機械的に数えられる単位のうち、どの検出項目にも無いもの。
+    Makefile のターゲット（`make 名前`）、依存定義の scripts（`npm run 名前` / `composer 名前`）、CI のワークフローのファイル（`gha:ファイル名`）、
+    リポジトリ直下をそのまま公開しているソースの、直下のディレクトリ・ファイル（`/名前` で始まる URL の項目）。"""
+    paths_by_src: dict[str, list[str]] = defaultdict(list)
+    url_first: dict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        src = str(r.get("source", "")).lower()
+        for p in (r.get("path"), r.get("internal_path")):
+            if not p:
+                continue
+            paths_by_src[src].append(squash(str(p)).lower())
+            if is_url_item(r):
+                seg = str(p).lstrip("/").split("/", 1)[0].split("?", 1)[0]
+                if seg and not seg.startswith("{"):
+                    url_first[src].add(seg.lower())
+    out: list[dict] = []
+    base = inventory["base_dir"]
+    roots = {str(s.get("name", "")).lower(): str(s.get("root", "")).replace("\\", "/").rstrip("/") for s in inventory.get("sources", [])}
+
+    def has(src: str, want: str) -> bool:
+        return any(p == want or p.endswith(" " + want.split(" ", 1)[-1]) and p.split(" ", 1)[0] in ("npm", "yarn", "pnpm") and want.startswith("npm ")
+                   for p in paths_by_src.get(src, []))
+
+    for f in inventory["files"]:
+        src = str(f.get("source", "")).lower()
+        name = f["path"].rsplit("/", 1)[-1]
+        try_read = name in ("Makefile", "makefile", "GNUmakefile") or name.endswith(".mk") or name in ("package.json", "composer.json")
+        if try_read and f.get("text"):
+            try:
+                text = read_text(resolve(base, f["path"]))
+            except OSError:
+                continue
+            if name in ("package.json", "composer.json"):
+                try:
+                    scripts = json.loads(text).get("scripts") or {}
+                except (ValueError, AttributeError):
+                    scripts = {}
+                tool = "npm run" if name == "package.json" else "composer"
+                for k in scripts if isinstance(scripts, dict) else []:
+                    want = f"{tool} {k}".lower()
+                    if not has(src, want):
+                        out.append({"source": src, "kind": "依存定義の scripts", "name": f"{tool} {k}", "where": f["path"]})
+            else:
+                for n, line in enumerate(text.splitlines(), 1):
+                    m = _MAKE_RULE.match(line)
+                    if not m:
+                        continue
+                    for t in m.group(1).split():
+                        if "%" in t or "$" in t:
+                            continue
+                        if not has(src, f"make {t}".lower()):
+                            out.append({"source": src, "kind": "Makefile のターゲット", "name": f"make {t}", "where": f"{f['path']}:{n}"})
+        m = _CI_WORKFLOW.search(f["path"])
+        if m and not any(m.group(2).lower() in p for p in paths_by_src.get(src, [])):
+            out.append({"source": src, "kind": "CI のワークフロー", "name": f"gha:{m.group(2)}", "where": f["path"]})
+
+    # リポジトリ直下をそのまま公開しているソース（直下の名前を先頭に持つ URL の項目が 3 つ以上ある）は、直下の名前ごとに項目があるかを見る
+    for s in inventory.get("sources", []):
+        src = str(s.get("name", "")).lower()
+        root = roots.get(src, "")
+        top: dict[str, str] = {}
+        for f in inventory["files"]:
+            if str(f.get("source", "")).lower() != src or not f["path"].replace("\\", "/").startswith(root + "/"):
+                continue
+            rel = f["path"].replace("\\", "/")[len(root) + 1:]
+            first = rel.split("/", 1)[0]
+            top.setdefault(first, "ディレクトリ" if "/" in rel else "ファイル")
+        for pr in s.get("pruned", []) or []:
+            d = str(pr.get("dir", "")).replace("\\", "/")
+            if d.startswith(root + "/"):
+                top.setdefault(d[len(root) + 1:].split("/", 1)[0], "ディレクトリ")
+        matched = {n for n in top if n.lower() in url_first.get(src, set())}
+        if len(matched) < 3:
+            continue
+        for n, what in sorted(top.items()):
+            if n not in matched:
+                out.append({"source": src, "kind": f"公開ディレクトリ直下の{what}", "name": f"/{n}" + ("/{path*}" if what == "ディレクトリ" else ""), "where": f"{root}/{n}"})
+    return out
 
 
 def _mentioned(blob: str, word: str) -> bool:
@@ -857,6 +944,22 @@ def main() -> int:
         md += ["コメント・文書・ロックファイル・名前空間の識別子の中だけに現れるもの（参照のリンクであることが多い。名前だけを挙げる。"
                "依存の取得元・バッジの外部サービス・関連リポジトリなど、接続先や連携先の手がかりになるものがあれば載せる）:", "",
                "、".join(f"`{g['host']}`" for g in hnotes[:150]) + (f" ほか {len(hnotes) - 150} 個" if len(hnotes) > 150 else ""), ""]
+
+    # ---- 5e. ファイルごとに 1 件ずつ書く単位の漏れ
+    ugaps = unit_gaps(inventory, all_rows)
+    summary["unit_gaps"] = len(ugaps)
+    md += ["### 5e. ファイルごとに 1 件ずつ書く単位のうち、項目の無いもの", "",
+           "Makefile のターゲット、依存定義の scripts、CI のワークフローのファイル、リポジトリ直下をそのまま公開しているソースの直下のディレクトリ・ファイル。"
+           "パス 2 の探し手はこれらを書き直さないので、ここに出たものは誰も書いていない。ファイルを開いて、項目を `work/pass1/lead.findings.jsonl` に足す"
+           "（起動点のスクリプトを `/` の項目で表しているなど、別の項目に含まれていれば、そのままでよい）。", ""]
+    if ugaps:
+        md += [f"**{len(ugaps)} 件。**", "", "| ソース | 種類 | 書くべき識別子 | 場所 |", "|---|---|---|---|"]
+        md += [f"| {g['source']} | {g['kind']} | `{g['name']}` | `{g['where']}` |" for g in ugaps[:120]]
+        if len(ugaps) > 120:
+            md.append(f"| … | | ほか {len(ugaps) - 120} 件 | |")
+        md.append("")
+    else:
+        md += ["なし。", ""]
 
     # ---- 6. 証跡と形式
     problems, fixable = verify_evidence(all_rows, inventory["base_dir"])
