@@ -30,10 +30,11 @@ from check import find_quote, quote_in  # noqa: E402
 from xlsx import Link, Workbook  # noqa: E402
 
 LEGEND = [
-    ("優先度", "診断で先に見る価値（高 / 中 / 低）。脆弱だという判定ではない"),
     ("認証", "その項目に届く前に、利用者の認証・認可を実際に通るか。「なし」には、ガードが付いているが中身が何も確かめていないものを含む"),
     ("パラメータ", "種類ごとに 1 行。* は必須、? は必須かどうかがコードから分からなかったもの。名前が * の項目は、本文が丸ごと別の処理に渡っていることを表す"),
-    ("確度", "高: 定義を直接読んだ / 中: 規約や推定を含む / 低: 存在する可能性がある程度"),
+    ("由来", "その項目を何から見つけたか。コードの定義 / 設定 / 仕様書 / 呼ぶ側のコードにだけある / フレームワーク等が生やす（コードに定義なし）/ 文書 / 状況からの推定。"
+             "「フレームワーク等が生やす」「推定」は、実在を確かめてから見る"),
+    ("調査メモ", "調査の担当者が残した観察と、未検証の仮説。別シートに分けてある。判定を先に行い、後から突き合わせる使い方を想定"),
     ("根拠", "ファイルと行。引用の全文は attack-surface.json にある"),
     ("IMPLICIT", "コードに定義が無く、フレームワーク・ライブラリ・イメージが生やしている"),
     ("UNREFERENCED", "定義はあるが、入力内のどのクライアントからも呼ばれていない"),
@@ -56,6 +57,13 @@ LEGEND = [
 PRIO_JA = {"high": "高", "medium": "中", "low": "低", "": "-"}
 AUTH_JA = {"required": "あり", "none": "なし", "unknown": "不明（証跡なし）", "n/a": "該当なし"}
 CONF_JA = {"high": "高", "medium": "中", "low": "低"}
+ORIGIN_JA = {"code": "コードの定義", "config": "設定", "spec": "仕様書", "client": "呼ぶ側にだけある", "implicit": "フレームワーク等が生やす",
+             "doc": "文書", "inferred": "推定"}
+
+
+def origin_ja(it: dict) -> str:
+    o = str(it.get("origin", "") or "")
+    return ORIGIN_JA.get(o, o)
 REACH_JA = {"direct": "直接", "indirect": "保存・中継の後", "unknown": "不明"}
 KIND_ORDER = ["http", "page", "static", "proxy", "websocket", "graphql", "grpc", "rpc", "event", "job", "file-input", "port", "cloud", "host",
               "cli", "ipc", "other", "input-channel", "parser"]
@@ -275,22 +283,22 @@ def main() -> int:
     (run / "attack-surface.json").write_text(json.dumps({"meta": stats, "items": items}, ensure_ascii=False, indent=1), encoding="utf-8")
 
     # ---- CSV（Excel で開けるよう BOM 付き）
-    header = ["ID", "層", "優先度", "ソース", "種別", "メソッド", "パス / 識別子", "ホスト", "ソース内のパス", "概要", "認証", "認証の根拠", "パラメータ",
+    # 観察した事実だけを載せる。判断（優先度・確度）、工程の記録（発見元）、仮説を含む備考は attack-surface.json にだけ残す
+    header = ["ID", "層", "ソース", "種別", "メソッド", "パス / 識別子", "ホスト", "ソース内のパス", "概要", "認証", "認証の根拠", "パラメータ",
               "受け取るもの・解釈するもの", "掛かる範囲", "部品（バージョン）", "届く入口", "届き方", "届く解釈点",
-              "フラグ", "タグ", "確度", "由来", "根拠（ファイル:行）", "備考", "優先度の理由", "発見元", "呼び出す API（画面）"]
+              "フラグ", "タグ", "由来", "根拠（ファイル:行）", "呼び出す API（画面）"]
     with open(run / "targets.csv", "w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(header)
         for it in items:
             w.writerow([
-                it["id"], it["layer"], PRIO_JA.get(it.get("priority", ""), it.get("priority", "")), it.get("source", ""), it["kind"], it.get("method", ""),
+                it["id"], it["layer"], it.get("source", ""), it["kind"], it.get("method", ""),
                 it.get("path", ""), " / ".join([h for h in [it.get("host", ""), *as_list(it.get("also_hosts"))] if h]), it.get("internal_path", ""),
                 squash(it.get("summary", "")),
                 AUTH_JA.get(it.get("auth", ""), it.get("auth", "")), squash(it.get("auth_evidence", "")), params_text(it),
                 squash(it.get("parses", "")) or joined(it.get("consumes")), squash(it.get("scope", "")), squash(it.get("component", "")),
                 joined(it.get("fed_by")), REACH_JA.get(it.get("reach", ""), it.get("reach", "") or ""), joined(it.get("reaches")),
-                " ".join(it["flags"]), " ".join(it["tags"]), CONF_JA.get(it.get("confidence", ""), it.get("confidence", "")), it.get("origin", ""),
-                ev_text(it, 5), squash(it.get("notes", "")), squash(it.get("priority_reason", "")), it.get("found_by", ""), joined(it.get("calls")),
+                " ".join(it["flags"]), " ".join(it["tags"]), origin_ja(it), ev_text(it, 5), joined(it.get("calls")),
             ])
 
     # ---- Markdown の表
@@ -302,12 +310,6 @@ def main() -> int:
     md = ["# 診断対象一覧", "",
           f"全 {len(items)} 件（入口 {lay.get('入口', 0)} / 受け口 {lay.get('受け口', 0)} / 解釈点 {lay.get('解釈点', 0)}）。"
           "列の意味とフラグは `targets.csv` と同じ。詳細（根拠の引用・パラメータ）は `attack-surface.json`。", ""]
-    high = [it for it in items if it.get("priority") == "high"]
-    if high:
-        md += [f"## 優先度: 高（{len(high)} 件）", "", "| ID | 層 | ソース | 対象 | 認証 | フラグ | 理由 |", "|---|---|---|---|---|---|---|"]
-        md += [f"| {it['id']} | {it['layer']} | {cell(it.get('source'))} | `{target(it)}` | "
-               f"{AUTH_JA.get(it.get('auth', ''), '')} | {' '.join(it['flags'])} | {cell(it.get('priority_reason') or it.get('summary'))} |" for it in high]
-        md.append("")
     outside = [it for it in items if any(f in it["flags"] for f in UNINTENDED) or (it["layer"] != "入口" and "IMPLICIT" in it["flags"])]
     if outside:
         md += [f"## 開発者の意図の外にある受け口・解釈点（{len(outside)} 件）", "",
@@ -336,13 +338,13 @@ def main() -> int:
         if not group:
             continue
         with_host = any(it.get("host") for it in group)
-        head = "| ID | 優先 | 種別 | " + ("ホスト | " if with_host else "") + "メソッド | パス / 識別子 | パラメータ | 概要 | 認証 | フラグ | 確度 | 根拠 |"
+        head = "| ID | 種別 | " + ("ホスト | " if with_host else "") + "メソッド | パス / 識別子 | パラメータ | 概要 | 認証 | フラグ | 由来 | 根拠 |"
         md += [f"## {source}（{len(group)} 件）", "", head, "|" + "---|" * (head.count("|") - 1)]
         for it in group:
             host = f"{cell('<br>'.join([h for h in [it.get('host', ''), *as_list(it.get('also_hosts'))] if h]))} | " if with_host else ""
             md.append(
-                f"| {it['id']} | {PRIO_JA.get(it.get('priority', ''), '-')} | {it['kind']} | {host}{it.get('method', '')} | `{cell(it.get('path', ''))}` | {params_text(it, '<br>').replace('|', '¦')} | {cell(it.get('summary', ''))} | "
-                f"{AUTH_JA.get(it.get('auth', ''), '')} | {' '.join(it['flags'])} | {CONF_JA.get(it.get('confidence', ''), '')} | {cell(ev_text(it, 2))} |"
+                f"| {it['id']} | {it['kind']} | {host}{it.get('method', '')} | `{cell(it.get('path', ''))}` | {params_text(it, '<br>').replace('|', '¦')} | {cell(it.get('summary', ''))} | "
+                f"{AUTH_JA.get(it.get('auth', ''), '')} | {' '.join(it['flags'])} | {origin_ja(it)} | {cell(ev_text(it, 2))} |"
             )
         md.append("")
     # ---- サイトマップ: 画面と、そこから呼ばれる API（calls を一覧の ID に結ぶ）
@@ -395,9 +397,6 @@ def main() -> int:
     def hosts(it: dict) -> str:
         return "\n".join(h for h in [it.get("host", ""), *as_list(it.get("also_hosts"))] if h)
 
-    def prio(it: dict) -> str:
-        return PRIO_JA.get(it.get("priority", ""), it.get("priority", "") or "-")
-
     def styles(n: int, i: int, link_cols: tuple = ()) -> list[str]:
         base = "alt" if i % 2 else "text"
         return [("link_alt" if base == "alt" else "link") if c in link_cols else base for c in range(n)]
@@ -417,38 +416,39 @@ def main() -> int:
                        ("解釈点", "受け取った値を解釈する処理と、値が届く入口"),
                        ("サイトマップ", "画面と、その画面から呼ばれる API（画面がある場合のみ）"),
                        ("リクエスト", "HTTP で送れる入口ごとのリクエストのひな形。項目名と場所はコードから読めたもの、値は仮"),
+                       ("調査メモ", "調査の担当者が残した観察と未検証の仮説（判定の後で突き合わせる用）"),
                        ("凡例", "フラグ・記号・列の意味")):
         sh.row([name, desc], "text")
     sh.row([""], "note")
     sh.row(["静的にコードを読んだ結果です。脆弱性の有無は判定していません。確定できなかった点は coverage.md、解説は REPORT.md にあります。"], "note")
 
-    head = ["ID", "優先度", "ソース", "種別", "ホスト", "Method", "パス / 識別子", "パラメータ", "概要", "認証", "認証の根拠", "フラグ", "届く解釈点", "確度", "根拠（ファイル:行）",
-            "備考", "優先度の理由"]
-    sh = book.sheet("対象一覧", widths=[10, 7, 14, 9, 22, 9, 44, 34, 44, 12, 34, 22, 30, 6, 38, 50, 34])
+    # 観察した事実だけを載せる（判断の列は置かない。調査メモは別シート）
+    head = ["ID", "ソース", "種別", "ホスト", "Method", "パス / 識別子", "パラメータ", "概要", "認証", "認証の根拠", "フラグ", "届く解釈点", "由来", "根拠（ファイル:行）"]
+    sh = book.sheet("対象一覧", widths=[10, 14, 9, 22, 9, 44, 34, 44, 12, 34, 22, 30, 16, 38])
     sh.row(head, "head")
     for i, it in enumerate(entries):
         first = Link(it["id"], "リクエスト", req_row[it["id"]]) if it["id"] in req_row else it["id"]
-        sh.row([first, prio(it), it.get("source", ""), it["kind"], hosts(it), it.get("method", ""), it.get("path", ""), params_text(it), squash(it.get("summary", "")),
+        sh.row([first, it.get("source", ""), it["kind"], hosts(it), it.get("method", ""), it.get("path", ""), params_text(it), squash(it.get("summary", "")),
                 AUTH_JA.get(it.get("auth", ""), it.get("auth", "")), squash(it.get("auth_evidence", "")), "\n".join(it["flags"]), "\n".join(map(str, as_list(it.get("reaches")))),
-                CONF_JA.get(it.get("confidence", ""), ""), ev_text(it, 3).replace(" ; ", "\n"), squash(it.get("notes", "")), squash(it.get("priority_reason", ""))],
+                origin_ja(it), ev_text(it, 3).replace(" ; ", "\n")],
                styles(len(head), i))
 
-    head = ["ID", "優先度", "ソース", "識別子", "掛かる範囲", "受け取るもの", "部品（バージョン）", "概要", "認証", "フラグ", "確度", "根拠（ファイル:行）", "備考", "優先度の理由"]
-    sh = book.sheet("受け口", widths=[10, 7, 14, 40, 20, 40, 28, 48, 12, 22, 6, 38, 50, 34])
+    head = ["ID", "ソース", "識別子", "掛かる範囲", "受け取るもの", "部品（バージョン）", "概要", "認証", "フラグ", "由来", "根拠（ファイル:行）"]
+    sh = book.sheet("受け口", widths=[10, 14, 40, 20, 40, 28, 48, 12, 22, 16, 38])
     sh.row(head, "head")
     for i, it in enumerate(intake_items):
-        sh.row([it["id"], prio(it), it.get("source", ""), it.get("path", ""), squash(it.get("scope", "")), "\n".join(map(str, as_list(it.get("consumes")))),
+        sh.row([it["id"], it.get("source", ""), it.get("path", ""), squash(it.get("scope", "")), "\n".join(map(str, as_list(it.get("consumes")))),
                 squash(it.get("component", "")), squash(it.get("summary", "")), AUTH_JA.get(it.get("auth", ""), it.get("auth", "")), "\n".join(it["flags"]),
-                CONF_JA.get(it.get("confidence", ""), ""), ev_text(it, 3).replace(" ; ", "\n"), squash(it.get("notes", "")), squash(it.get("priority_reason", ""))], styles(len(head), i))
+                origin_ja(it), ev_text(it, 3).replace(" ; ", "\n")], styles(len(head), i))
 
-    head = ["ID", "優先度", "ソース", "解釈点", "何を解釈するか", "部品（バージョン）", "届く入口", "届き方", "概要", "認証", "フラグ", "確度", "根拠（ファイル:行）", "備考", "優先度の理由"]
-    sh = book.sheet("解釈点", widths=[10, 7, 14, 40, 36, 26, 36, 14, 46, 12, 22, 6, 38, 50, 34])
+    head = ["ID", "ソース", "解釈点", "何を解釈するか", "部品（バージョン）", "届く入口", "届き方", "概要", "認証", "フラグ", "由来", "根拠（ファイル:行）"]
+    sh = book.sheet("解釈点", widths=[10, 14, 40, 36, 26, 36, 14, 46, 12, 22, 16, 38])
     sh.row(head, "head")
     for i, it in enumerate(parser_items):
-        sh.row([it["id"], prio(it), it.get("source", ""), it.get("path", ""), squash(it.get("parses", "")), squash(it.get("component", "")),
+        sh.row([it["id"], it.get("source", ""), it.get("path", ""), squash(it.get("parses", "")), squash(it.get("component", "")),
                 "\n".join(map(str, as_list(it.get("fed_by")))) or "未特定", REACH_JA.get(it.get("reach", ""), it.get("reach", "") or "-"), squash(it.get("summary", "")),
-                AUTH_JA.get(it.get("auth", ""), it.get("auth", "")), "\n".join(it["flags"]), CONF_JA.get(it.get("confidence", ""), ""),
-                ev_text(it, 3).replace(" ; ", "\n"), squash(it.get("notes", "")), squash(it.get("priority_reason", ""))], styles(len(head), i))
+                AUTH_JA.get(it.get("auth", ""), it.get("auth", "")), "\n".join(it["flags"]), origin_ja(it),
+                ev_text(it, 3).replace(" ; ", "\n")], styles(len(head), i))
 
     if pages:
         head = ["ID", "ソース", "ホスト", "パス", "概要", "認証", "呼び出す API"]
@@ -465,6 +465,14 @@ def main() -> int:
         first = Link(it["id"], "対象一覧", entry_row[it["id"]]) if it["id"] in entry_row else it["id"]
         sh.row([first, it.get("method", ""), it.get("path", ""), AUTH_JA.get(it.get("auth", ""), ""), request_template(it)], ["link", "text", "text", "text", "mono"])
 
+    # 調査メモ: 観察と未検証の仮説。判定に先入観を与えないよう、一覧とは分けて置く
+    noted = [it for it in items if squash(it.get("notes", ""))]
+    if noted:
+        sh = book.sheet("調査メモ", widths=[10, 8, 14, 44, 110])
+        sh.row(["ID", "層", "ソース", "パス / 識別子", "調査メモ（観察と未検証の仮説。判定の後で突き合わせる）"], "head")
+        for i, it in enumerate(noted):
+            sh.row([it["id"], it["layer"], it.get("source", ""), it.get("path", ""), squash(it.get("notes", ""))], styles(5, i))
+
     sh = book.sheet("凡例", widths=[24, 100], autofilter=False)
     sh.row(["項目", "意味"], "head")
     for k, v in LEGEND:
@@ -477,7 +485,7 @@ def main() -> int:
         pass
 
     print(f"targets={len(items)} entries={lay.get('入口', 0)} intake={lay.get('受け口', 0)} parsers={lay.get('解釈点', 0)} "
-          f"merged_from={len(rows)} line_fixed={fixed} secrets_masked={masked} high={len(high)}")
+          f"merged_from={len(rows)} line_fixed={fixed} secrets_masked={masked}")
     print(f"out={run.as_posix()} (attack-surface.xlsx attack-surface.json targets.csv targets.md requests.http stats.json)")
     return 0
 
