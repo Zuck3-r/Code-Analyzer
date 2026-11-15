@@ -276,6 +276,23 @@ def same_mechanism(a: dict, b: dict, file: str) -> bool:
     return bool(ident_tokens(a.get("path", "")) & ident_tokens(b.get("path", "")))
 
 
+_ROLE_PREFIX = re.compile(r"^\s*(outbound|inbound|secret)\s*:", re.I)
+
+
+def role_of(f: dict) -> str:
+    """識別子の接頭辞のうち、向きや性質を表すもの（outbound: / inbound: / secret:）。無ければ空。
+
+    送信と、その応答の取り込み。資格情報の所在と、それを使う処理。どちらも同じ行を根拠にすることがあるが、別の対象。
+    """
+    m = _ROLE_PREFIX.match(str(f.get("path", "") or ""))
+    return m.group(1).lower() if m else ""
+
+
+def _ident_words(f: dict) -> set[str]:
+    """根拠の位置が同じ項目どうしを「同じ対象」とみなすための語。向きや性質の接頭辞そのもの（secret など）は数えない。"""
+    return ident_tokens(_ROLE_PREFIX.sub("", str(f.get("path", "") or ""), count=1)) | ident_tokens(f.get("handler", ""))
+
+
 def finding_key(f: dict) -> tuple:
     """照合用の鍵 (source, 種別の系統, メソッド, 識別子)。ホストは含めない（Index が別に照合する）。"""
     kind = kind_of(f)
@@ -346,16 +363,18 @@ class Index:
                 return it
         if is_url_item(f) or KIND_GROUP.get(kind_of(f), kind_of(f)) in ("host", "port", "graphql"):
             return None
-        # 識別子の書き方が揺れる種別: 根拠が同じ箇所を指し、識別子に共通の語があれば同じ対象とみなす
+        # 識別子の書き方が揺れる種別: 根拠が同じ箇所を指し、識別子に共通の語があれば同じ対象とみなす。
+        # ただし、向きや性質の接頭辞（outbound: / inbound: / secret:）が食い違うものは別の対象として残す
+        # （外部への送信とその応答、資格情報の所在とそれを使うワークフローは、同じ行を根拠にしても別物）
         file, line, quote = first_evidence(f)
         if not file:
             return None
-        mine = ident_tokens(f.get("path", "")) | ident_tokens(f.get("handler", ""))
+        mine, role = _ident_words(f), role_of(f)
         for it in self.by_file.get((str(f.get("source", "")).strip().lower(), "入口", file), []):
-            if is_url_item(it) or anchor(it) is not None or not methods_compatible(f, it):
+            if is_url_item(it) or anchor(it) is not None or not methods_compatible(f, it) or role_of(it) != role:
                 continue
             _f2, line2, quote2 = first_evidence(it)
-            if same_spot(line, quote, line2, quote2) and (mine & (ident_tokens(it.get("path", "")) | ident_tokens(it.get("handler", "")))):
+            if same_spot(line, quote, line2, quote2) and (mine & _ident_words(it)):
                 return it
         return None
 

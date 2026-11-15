@@ -116,6 +116,45 @@ def _propose(rel: str, f: dict, lang_groups: set[str]) -> str:
     return ""
 
 
+def _norm_name(s) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(s or "").lower())
+
+
+def _own_code(source: str, files: list[dict], rel_of, base) -> tuple[set[str], set[str]]:
+    """このソース自身のコードだと分かる手がかり: (依存定義が入口に指定しているファイルの相対パス, ソース名・パッケージ名を正規化したもの)。
+
+    同梱ライブラリの判定（冒頭のライセンス表記・版数）は、プロジェクト自身の本体（冒頭に著作権表記のある大きな 1 ファイル）にも当たる。
+    本体を流し読みに落とすと取りこぼしになるので、ここで拾った手がかりに当たるファイルは判定から外す。
+    """
+    entries: set[str] = set()
+    names = {_norm_name(source)}
+    for f in files:
+        low = rel_of(f).lower()
+        dirs, name = low.split("/")[:-1], low.rsplit("/", 1)[-1]
+        if name not in ("package.json", "composer.json", "bower.json") or f["size"] > 500_000 or any(d in VENDOR_DIRS or d == "node_modules" for d in dirs):
+            continue
+        try:
+            data = json.loads(read_text(resolve(base, f["path"])))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        names.add(_norm_name(str(data.get("name", "")).rsplit("/", 1)[-1]))
+        values = [data.get(k) for k in ("main", "module", "browser", "unpkg", "jsdelivr")]
+        values += list(data["bin"].values()) if isinstance(data.get("bin"), dict) else [data.get("bin")]
+        prefix = "/".join(dirs) + "/" if dirs else ""
+        for v in values:
+            if isinstance(v, str) and v.strip():
+                entries.add(prefix + re.sub(r"^\./", "", v.strip().lower()))
+    return entries, {n for n in names if len(n) >= 3}
+
+
+def _is_own(rel: str, own: tuple[set[str], set[str]]) -> bool:
+    low = rel.lower()
+    stem = re.sub(r"(\.min)?\.[a-z0-9]+$", "", low.rsplit("/", 1)[-1])
+    return low in own[0] or _norm_name(stem) in own[1]
+
+
 def _language_groups(files: list[dict], rel_of) -> set[str]:
     """翻訳ファイルの置き場所。翻訳らしい名前のディレクトリの下に、言語コードの名前が 3 つ以上並んでいる場合だけ採る。
 
@@ -209,10 +248,12 @@ def triage(inv: dict, overrides: list[dict] | None = None) -> dict:
     promoted: list[dict] = []
     for source, files in by_source.items():
         groups = _language_groups(files, rel_of)
+        own = _own_code(source, files, rel_of, base)
         for f in files:
             f.pop("scope", None)
             cat = _propose(rel_of(f), f, groups)
-            if not cat and f.get("text") and f["tier"] != "C" and f["ext"] in (".js", ".mjs", ".cjs", ".css") and f["size"] > 60_000 and not KEEP.search(rel_of(f).lower()):
+            if not cat and f.get("text") and f["tier"] != "C" and f["ext"] in (".js", ".mjs", ".cjs", ".css") and f["size"] > 60_000 and not KEEP.search(rel_of(f).lower()) \
+                    and not _is_own(rel_of(f), own):  # プロジェクト自身の本体（依存定義の入口、プロジェクト名と同じ名前）は同梱ライブラリにしない
                 try:  # 同梱された配布物の印（冒頭のライセンス表記・版数）
                     with open(resolve(base, f["path"]), "rb") as fh:
                         head = fh.read(800)
@@ -321,7 +362,9 @@ def write_scope(work: Path, inv: dict, result: dict) -> Path:
            "2. 区分の名前と合わない置き場所（`locale/` の下の設定、`fixtures/` の下のサーバー定義、`vendor/` の下の自作コード）が無いかを、例とディレクトリ名から見る",
            "3. 「安全網が戻したもの」を見て、同じ種類の取りこぼしが D に残っていそうなら、その区分ごと C に戻す",
            "4. ティア C の「テストコード」「文書」が、このシステムでは入口の定義を含む（テスト用サーバーが本番にも載る、文書に API 定義が埋め込まれている）なら B に上げる",
-           "5. 迷ったら読む側に倒す。戻すときは `work/scope.jsonl` に 1 行ずつ書き、`inventory.py --refresh RUN` を実行する", "",
+           "5. ティア C の「リポジトリに同梱された外部ライブラリ」の例に、**このシステム自身のコード**（版数の付かない名前の大きなファイル、プロジェクト名に近い名前、"
+           "テンプレートや画面から本体として読み込まれているスクリプト）が混じっていないかを見る。判定は冒頭のライセンス表記と版数によるので、自作の本体にも当たることがある。混じっていたら A か B に上げる",
+           "6. 迷ったら読む側に倒す。戻すときは `work/scope.jsonl` に 1 行ずつ書き、`inventory.py --refresh RUN` を実行する", "",
            "```json",
            '{"path_regex": "/locale/routes\\\\.json$", "tier": "B", "reason": "翻訳の置き場所にあるがルート定義"}',
            '{"scope": "fixture", "source": "shop-api", "tier": "C", "reason": "fixtures にサーバー設定が混じっている"}',

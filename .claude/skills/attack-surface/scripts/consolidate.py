@@ -315,6 +315,25 @@ def main() -> int:
             md.append(f"| … | ほか {len(cross_file) - 100} 件 | |")
         md.append("")
 
+    # 複数の担当者が書いたパラメータが、書き方違いのまま重なっている見込みの入口（名前に括弧・空白・まとめ書きが混じる、件数が多い）
+    crowded = []
+    for it in items:
+        ps = [p for p in as_list(it.get("params")) if isinstance(p, dict)]
+        writers = [x for x in str(it.get("found_by", "")).split("+") if x]
+        loose = Counter(p.get("in") for p in ps if re.search(r"[{<\s/]|[^\x00-\x7f]", str(p.get("name", ""))))
+        # リクエストのひな形になる入口（URL と、URL の上の操作）だけを見る。コマンドやイベントの項目名は説明的でよい
+        if (is_url_item(it) or kind_of(it) in ("rpc", "graphql", "grpc")) and len(writers) >= 2 and (len(ps) >= 20 or any(n >= 2 for n in loose.values())):
+            crowded.append((it, len(ps), len(writers)))
+    if crowded:
+        md += [f"## パラメータ欄が重なっている見込みの入口: {len(crowded)} 件", "",
+               "複数の担当者が同じ項目を別の名前で書くと（`{id}` と `<ID>`、`a / b` のまとめ書き、説明つきの名前）、統合では別の項目として並ぶ。"
+               "リクエストのひな形はこの欄から作るので、根拠のコードを読み直し、`overrides.jsonl` の `set` で `params` を書き直す"
+               "（`{\"match\": {\"key\": \"…\"}, \"set\": {\"params\": […]}}`）。1 つの URL に操作が集まる API（`?action=` 型）の、URL の入口で起きやすい。", "",
+               "| 鍵 | 入口 | パラメータ数 | 書いた担当者の数 |", "|---|---|---:|---:|"]
+        for it, n, w in sorted(crowded, key=lambda c: -c[1])[:60]:
+            md.append(f"| {it.get('key', '')} | `{label(it)}` | {n} | {w} |")
+        md.append("")
+
     md += ["## 解釈点と入口の結び付け", "",
            f"解釈点の `fed_by` のうち、入口の項目に結べたもの {fed_linked} 件（結べた入口には、`reaches` を自動で足してある）。**結べなかった書き方: {len(fed_unmatched)} 通り。**"
            f" 入口に結べたので `REACH_UNKNOWN` を外した解釈点: {reach_cleared} 件。", ""]
