@@ -280,6 +280,20 @@ def main() -> int:
             md.append(f"| … | ほか {len(multi) - 150} 件 | | |")
         md.append("")
 
+    # クエリ付きで書かれた識別子を、クエリの無い項目にまとめたもの（照合ではクエリを無視するので、クエリで区別される別の対象も 1 件になる）
+    with_query = [it for it in items if is_url_item(it) and len(it.get("_spellings", [])) > 1
+                  and any("?" in s for s in it["_spellings"]) and any("?" not in s for s in it["_spellings"])]
+    if with_query:
+        md += [f"## クエリ付きで書かれた識別子を、クエリの無い項目にまとめたもの: {len(with_query)} 件", "",
+               "URL の入口の照合ではクエリを無視する。クエリの値で操作が変わるだけなら正しい（クエリは `params` に書く）。"
+               "クエリの合図で別の仕組みが動くもの（デバッガの起動、別のモード）なら誤りなので、`aliases.jsonl` でクエリ付きの書き方を別の識別子"
+               "（`debug:…` など、kind `other`）に直して分ける。", "",
+               "| ソース | 採用した書き方 | クエリ付きの書き方 |", "|---|---|---|"]
+        for it in with_query[:60]:
+            qs = [s for s in it["_spellings"] if "?" in s]
+            md.append(f"| {it.get('source', '')} | `{it['_spellings'][0]}` | {'<br>'.join('`' + s + '`' for s in qs[:4])} |")
+        md.append("")
+
     # 同じ箇所を根拠にしているのに別件のまま残ったもの
     by_file: dict[tuple, list[dict]] = defaultdict(list)
     for it in items:

@@ -365,7 +365,8 @@ def main() -> int:
             out.append(f"{hit} ({c})" if hit else f"未対応 ({c})")
         return out
 
-    pages = [it for it in items if it["kind"] == "page"]
+    # 画面と、画面を兼ねる URL の入口（同じ URL が HTML と JSON の両方を返すものは http と書き、calls を持つ）
+    pages = [it for it in items if it["kind"] == "page" or (is_url_item(it) and as_list(it.get("calls")))]
     if pages:
         md += ["# サイトマップ（画面と、呼び出す API）", "",
                "画面のコードから辿れた呼び出しを、一覧の ID に結んだもの。「未対応」は、呼び出し先が一覧に見つからなかったもの（受ける側が入力に無い、または書き方の違い）。", "",

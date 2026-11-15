@@ -7,7 +7,7 @@
   1. 以前の実行（work/final.findings.jsonl）と、今回の統合結果（work/merged.findings.jsonl）を読む
   2. 同じ対象かどうかを、統合と同じ規則で判定する。当たらなかったものは「層と種別が同じで、根拠 1 件目が同じファイルの近い行」で補う
   3. work/compare.jsonl（任意）: 人が確かめた対応と、持ち込まない項目
-  4. work/check/compare.md と compare.json に書く
+  4. work/check/compare.md と compare.json に書く（書いた対応が、自動で付くはずだった別の対応を外したときは、その組も挙げる）
   5. --carry を付けると、以前の実行にしか無い項目を work/carryover/<以前の実行名>.findings.jsonl に書く（consolidate.py が読む）
 
 work/compare.jsonl の書式（1 行 1 件の JSON。無ければ何もしない）:
@@ -130,6 +130,37 @@ def covering(it: dict, other: dict[tuple, list[dict]]) -> list[dict]:
     return list(seen.values())
 
 
+def auto_match(old: list[dict], new: list[dict], pair: dict[str, str], how: dict[str, str], differ: set) -> list[tuple[dict, dict]]:
+    """すでに pair にある対応を除いて、統合と同じ規則 → 根拠の位置、の順に対応を付ける（pair と how を書き換える）。根拠の位置で付けた組を返す。"""
+    index = Index()
+    for it in old:
+        if it["_k"] not in pair:
+            index.add(it)
+    taken = set(pair.values())
+    rest: list[dict] = []
+    for it in new:
+        if it["_k"] in taken:
+            continue
+        hit = index.find(it)
+        if hit is not None and hit["_k"] not in pair and (hit["_k"], it["_k"]) not in differ:
+            pair[hit["_k"]], how[hit["_k"]] = it["_k"], "規則"
+        else:
+            rest.append(it)
+    by_position: list[tuple[dict, dict]] = []
+    for it in rest:
+        f, line, _q = first_evidence(it)
+        if not f or not line:
+            continue
+        cands = [o for o in old if o["_k"] not in pair and (o["_k"], it["_k"]) not in differ
+                 and layer_of(o) == layer_of(it) and kind_of(o) == kind_of(it) and role_of(o) == role_of(it)
+                 and first_evidence(o)[0] == f and first_evidence(o)[1] and abs(first_evidence(o)[1] - line) <= NEAR
+                 and not (anchor(it) is not None and category_of(o) and category_of(it) and category_of(o) != category_of(it))]
+        if len(cands) == 1:
+            pair[cands[0]["_k"]], how[cands[0]["_k"]] = it["_k"], "根拠の位置"
+            by_position.append((cands[0], it))
+    return by_position
+
+
 def main() -> int:
     utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -198,31 +229,20 @@ def main() -> int:
             else:
                 pair[o["_k"]], how[o["_k"]] = n["_k"], "人が確認"
 
-    index = Index()
-    for it in old:
-        if it["_k"] not in pair:
-            index.add(it)
-    rest: list[dict] = []
-    for it in new:
-        if it["_k"] in pair.values():
-            continue
-        hit = index.find(it)
-        if hit is not None and hit["_k"] not in pair and (hit["_k"], it["_k"]) not in differ:
-            pair[hit["_k"]], how[hit["_k"]] = it["_k"], "規則"
-        else:
-            rest.append(it)
-    by_position: list[tuple[dict, dict]] = []
-    for it in rest:
-        f, line, _q = first_evidence(it)
-        if not f or not line:
-            continue
-        cands = [o for o in old if o["_k"] not in pair and (o["_k"], it["_k"]) not in differ
-                 and layer_of(o) == layer_of(it) and kind_of(o) == kind_of(it) and role_of(o) == role_of(it)
-                 and first_evidence(o)[0] == f and first_evidence(o)[1] and abs(first_evidence(o)[1] - line) <= NEAR
-                 and not (anchor(it) is not None and category_of(o) and category_of(it) and category_of(o) != category_of(it))]
-        if len(cands) == 1:
-            pair[cands[0]["_k"]], how[cands[0]["_k"]] = it["_k"], "根拠の位置"
-            by_position.append((cands[0], it))
+    manual = dict(pair)
+    by_position = auto_match(old, new, pair, how, differ)
+    # 人の判断が無かったら自動で付いていた対応（人が書いた対応が、正しい自動の対応を外していないかを確かめるため）
+    auto_only: dict[str, str] = {}
+    auto_match(old, new, auto_only, {}, differ)
+    displaced = []  # (人が書いた以前の鍵, 人が書いた今回の鍵, 外れた以前の鍵 / 外れた今回の鍵)
+    auto_by_new = {n: o for o, n in auto_only.items()}
+    for o, n in manual.items():
+        o2 = auto_by_new.get(n)
+        if o2 and o2 != o and o2 not in pair:
+            displaced.append((o, n, f"以前の `{o2}` と今回の `{n}` の自動の対応が外れ、以前の `{o2}` は「以前の実行にしか無い」に回った"))
+        n2 = auto_only.get(o)
+        if n2 and n2 != n and n2 not in pair.values():
+            displaced.append((o, n, f"以前の `{o}` と今回の `{n2}` の自動の対応が外れ、今回の `{n2}` は「今回にしか無い」に回った"))
 
     matched_new = set(pair.values())
     old_only = [it for it in old if it["_k"] not in pair]
@@ -311,6 +331,12 @@ def main() -> int:
                "`{\"old\": \"<鍵>\", \"new\": \"<今回の鍵>\", \"same\": false}` と書く（以前の項目は「以前の実行にしか無い項目」に戻る）。", "",
                "| 以前の実行（鍵） | 今回（鍵） | 根拠 |", "|---|---|---|"]
         md += [f"| `{cell(label(o), 70)}`（{o['_k']}） | `{cell(label(n), 70)}`（{n['_k']}） | `{cell(where(n))}` |" for o, n in by_position] + [""]
+    if displaced:
+        md += [f"## 人が書いた対応が外した、自動の対応: {len(displaced)} 件", "",
+               "`work/compare.jsonl` に書いた `new` の対応が、統合と同じ規則か根拠の位置で付いていた別の対応を外した。"
+               "外れた側が本当に別の対象かを確かめる。書いた対応が誤りなら直す（同じ今回の項目に以前の項目が 2 つ当たるなら、片方は `skip`（今回の項目に含まれる）にする）。", "",
+               "| 人が書いた対応（以前 → 今回） | 外れたもの |", "|---|---|"]
+        md += [f"| `{o}` → `{n}` | {what} |" for o, n, what in displaced] + [""]
     if unresolved:
         md += [f"## work/compare.jsonl のうち、当たらなかった行: {len(unresolved)}", ""] + [f"- {u}" for u in unresolved] + [""]
     (work / "check" / "compare.md").write_text("\n".join(md) + "\n", encoding="utf-8")
@@ -328,8 +354,11 @@ def main() -> int:
 
     print(f"previous={old_run.as_posix()} same_input={same_input} old={len(old)} new={len(new)} matched={len(pair)} "
           f"old_only={len(old_only)} (no_evidence_in_new={len(no_cover_old)}) new_only={len(new_only)} (no_evidence_in_old={len(no_cover_new)}) "
-          f"skip={len(old_only) - len(carry)} undecided={len(undecided)} unresolved_judgments={len(unresolved)}" + (f" carried={len(carry)}" if args.carry else ""))
+          f"skip={len(old_only) - len(carry)} undecided={len(undecided)} displaced={len(displaced)} unresolved_judgments={len(unresolved)}"
+          + (f" carried={len(carry)}" if args.carry else ""))
     print(f"report={(work / 'check' / 'compare.md').as_posix()}")
+    if displaced:
+        print(f"WARNING: work/compare.jsonl に書いた対応が、自動で付いていた対応を {len(displaced)} 件外しました。compare.md の「人が書いた対応が外した、自動の対応」を見てください。")
     if args.carry and undecided:
         print(f"WARNING: 今回も同じ箇所を根拠にする項目があるのに、判断が書かれていない項目を {len(undecided)} 件持ち込みました。"
               "同じ対象の書き方違いなら別件として重なります。compare.md の「未判断」を見て、work/compare.jsonl に new / skip / carry を書いてください。")

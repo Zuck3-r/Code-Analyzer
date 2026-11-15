@@ -8,6 +8,8 @@
   5. 知識ベースに手がかりのあるもののうち、検出項目で触れられていないもの
        5a 受け取り・解釈を担う部品（parser-components.json）
        5b 暗黙に存在し得るエンドポイント（implicit-endpoints.json）
+       5c 仕様書との照合（入力に OpenAPI / Swagger があるときだけ）
+       5d 入力に現れるホスト名のうち、どの検出項目にも出てこないもの
   6. 証跡の不一致（ファイルが無い / 行が範囲外 / 引用がその付近に無い）と、形式・記法の不備
   7. 出力に紛れ込んだ秘密情報らしき値
   8. --diff: パス 1 とパス 2 以降の突き合わせ（aliases.jsonl / prefixes.jsonl があれば適用してから比べる）
@@ -126,15 +128,90 @@ PARSER_HINTS: list[tuple[str, re.Pattern]] = [
 NOISY_EXT = {".md", ".txt", ".rst", ".lock", ".svg", ".css", ".scss", ".less", ".map", ".csv", ".snap"}
 
 def load_dismissed(run: Path) -> set[tuple[str, str]]:
-    """work/dismissed.jsonl に「確かめたうえで非該当」と記録されたもの。(source, 知識ベースの ID)"""
+    """work/dismissed.jsonl に「確かめたうえで非該当」と記録されたもの。(source, 知識ベースの ID またはホスト名)"""
     out: set[tuple[str, str]] = set()
     dpath = run / "work" / "dismissed.jsonl"
     if dpath.exists():
         for d in load_jsonl(dpath)[0]:
-            for key in ("component", "implicit", "id"):
-                if d.get(key):
-                    out.add((str(d.get("source", "")).lower(), str(d[key]).lower()))
+            for key in ("component", "implicit", "id", "host"):
+                for v in as_list(d.get(key)):
+                    out.add((str(d.get("source", "")).lower(), str(v).lower()))
     return out
+
+
+# ---- 入力に現れるホスト名（言及漏れの検査用。宛先かどうかの判断はしない）
+_URL_HOST = re.compile(
+    r"""(?i)\b(?:https?|wss?|ftps?|sftp|ssh|git|s3|gs|amqps?|mqtts?|redis|mongodb(?:\+srv)?|postgres(?:ql)?|mysql)://(?:[^\s/@"'<>]+@)?"""
+    r"""((?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9\-]{0,23})"""
+)
+# スキームの無い「ホスト名/名前/名前」（コンテナイメージ、パッケージの取得元など）
+_REF_HOST = re.compile(r"""(?i)(?<![\w.\-/@:])((?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})(?::\d{1,5})?/[\w.\-]+/[\w.\-]+""")
+_RESERVED_HOST = re.compile(r"(?i)(^|\.)(example\.(com|org|net)|example|invalid|test|localhost|local|internal|lan|home\.arpa)$")
+_FILE_LIKE_TLD = {"php", "js", "mjs", "cjs", "ts", "json", "jsonld", "md", "yml", "yaml", "html", "htm", "css", "scss", "txt", "xml", "svg", "png", "jpg",
+                  "gif", "lock", "py", "rb", "go", "sh", "ini", "conf", "cfg", "log", "map", "min", "wasm", "dist", "bak", "java", "kt", "cs", "rs", "vue"}
+_HOST_SKIP_WHY = re.compile(r"テスト用のデータ|バイナリ")
+# 文書・変更履歴・ライセンス・ロックファイルの中だけに現れる名前は、参照のリンクであることが多い（一覧では別に数える）
+_HOST_DOC_WHY = re.compile(r"文書|変更履歴|ライセンス|ロックファイル")
+_HOST_DOC_EXT = {".md", ".txt", ".rst", ".adoc", ".lock"}
+_COMMENT_LINE = re.compile(r"^\s*(?:#|//|\*|/\*|<!--|;|--\s|@license|@link|@see)")
+_INLINE_COMMENT = re.compile(r"(?:^|\s)(?://|#)\s")
+_IDENTIFIER_ATTR = re.compile(r"""(?i)(?:xmlns(?::\w+)?\s*=|["']@context["']\s*:|["']\$schema["']\s*:|["']@vocab["']\s*:|rdf:|xsi:schemaLocation|<!DOCTYPE)""")
+
+
+def input_hosts(inventory: dict) -> dict[tuple[str, str], dict]:
+    """入力のテキストファイルに現れるホスト名。(source, host) → {count, files: {file: 最初の行}, code: コードや設定の行に現れたか}。
+    予約済み・例示用の名前は除く。コメント・文書・名前空間の識別子の中だけに現れるものは code が False。"""
+    out: dict[tuple[str, str], dict] = {}
+    base = inventory["base_dir"]
+    for f in inventory["files"]:
+        if not f.get("text") or f["size"] > 2_000_000 or _HOST_SKIP_WHY.search(str(f.get("why", ""))):
+            continue
+        try:
+            lines = read_text(resolve(base, f["path"])).splitlines()
+        except OSError:
+            continue
+        doc_file = f.get("ext") in _HOST_DOC_EXT or bool(_HOST_DOC_WHY.search(str(f.get("why", ""))))
+        for n, line in enumerate(lines, 1):
+            if len(line) > 4000:
+                line = line[:4000]
+            found = [(m.group(1), m.start()) for m in _URL_HOST.finditer(line)]
+            found += [(m.group(1), m.start()) for m in _REF_HOST.finditer(line) if m.group(1).rsplit(".", 1)[-1].lower() not in _FILE_LIKE_TLD]
+            if not found:
+                continue
+            line_is_note = doc_file or bool(_COMMENT_LINE.match(line)) or bool(_IDENTIFIER_ATTR.search(line))
+            for h, pos in found:
+                h = h.lower().rstrip(".")
+                if _RESERVED_HOST.search(h) or not re.search(r"[a-z]", h.rsplit(".", 1)[-1]):
+                    continue
+                rec = out.setdefault((str(f.get("source", "")).lower(), h), {"count": 0, "files": {}, "code": False, "code_files": {}})
+                rec["count"] += 1
+                rec["files"].setdefault(f["path"], n)
+                if not (line_is_note or _INLINE_COMMENT.search(line[:pos])):
+                    rec["code"] = True
+                    rec["code_files"].setdefault(f["path"], n)
+    return out
+
+
+def host_gaps(inventory: dict, rows: list[dict], dismissed: set) -> tuple[list[dict], list[dict], dict]:
+    """入力に現れるホスト名のうち、どの検出項目にも出てこないもの（識別子・ホスト欄・概要・根拠の引用・パラメータのどこにも無い）。
+    備考（notes）だけに書かれている名前は、項目になっていないので数えない。
+    (コードや設定の行に現れるもの, コメント・文書・名前空間の識別子の中だけに現れるもの, 集計)"""
+    fields = ("path", "internal_path", "host", "also_hosts", "summary", "handler", "evidence", "params", "calls", "consumes", "parses", "component")
+    blob = "\n".join(json.dumps({k: r.get(k) for k in fields if r.get(k)}, ensure_ascii=False) for r in rows).lower()
+    hosts = input_hosts(inventory)
+    gaps, notes_only, mentioned, skipped = [], [], 0, 0
+    for (source, h), rec in hosts.items():
+        if re.search(rf"(?<![a-z0-9.\-]){re.escape(h)}(?![a-z0-9\-])", blob):
+            mentioned += 1
+        elif (source, h) in dismissed:
+            skipped += 1
+        elif rec["code"]:
+            gaps.append({"source": source, "host": h, "count": rec["count"], "files": rec["code_files"]})
+        else:
+            notes_only.append({"source": source, "host": h, "count": rec["count"], "files": rec["files"]})
+    for g in (gaps, notes_only):
+        g.sort(key=lambda x: (-len(x["files"]), -x["count"], x["host"]))
+    return gaps, notes_only, {"present": len(hosts), "mentioned": mentioned, "dismissed": skipped}
 
 
 def _mentioned(blob: str, word: str) -> bool:
@@ -754,6 +831,33 @@ def main() -> int:
         if spec_undoc:
             md += [f"- {r.get('source', '')} `{r.get('method', '')} {r.get('path', '')}`" for r in spec_undoc[:150]] + [""]
 
+    # ---- 5d. 入力に現れるホスト名の言及漏れ
+    hgaps, hnotes, hstat = host_gaps(inventory, all_rows, dismissed)
+    summary["hosts_present"] = hstat["present"]
+    summary["hosts_unmentioned"] = len(hgaps)
+    summary["hosts_unmentioned_notes_only"] = len(hnotes)
+    md += ["### 5d. 入力に現れるホスト名のうち、どの項目にも出てこないもの", "",
+           f"入力のテキストファイル（テスト用のデータとバイナリを除く）に、URL やイメージ名の形で現れるホスト名 {hstat['present']} 個のうち、"
+           f"検出項目のどこか（識別子・概要・備考・根拠の引用）に出てくるもの {hstat['mentioned']}、非該当と記録されたもの {hstat['dismissed']}。"
+           f"どこにも出てこないもののうち、**コードや設定の行に現れるもの {len(hgaps)}**、コメント・文書・ロックファイル・名前空間の識別子の中だけに現れるもの {len(hnotes)}。"
+           "予約済み・例示用の名前（`example.com`、`*.invalid`、`*.test`、`localhost` など）は数えていない。", ""]
+    if hgaps:
+        md += ["コードや設定の行に現れるものは、1 つずつ現れる場所を開く。このシステム・CI・開発用のコマンドが実行時に接続する先、ブラウザの遷移先、"
+               "テストが実際に接続する先、このプロジェクトが運営する名前なら、ホスト名（kind `host`、1 ホスト 1 件）か外向きの通信（`outbound:`）として載せる。"
+               "テストの中の架空の値・接続しない文字列と確かめたものは、`work/dismissed.jsonl` に `{\"source\": …, \"host\": \"<ホスト名>\", \"reason\": …}` を書く"
+               "（`host` はリストでもよい）。", "",
+               "| ソース | ホスト名 | 出現（ファイル数） | コードや設定の行に現れる場所 |", "|---|---|---:|---|"]
+        for g in hgaps[:80]:
+            where_ = "<br>".join(f"`{p}:{ln}`" for p, ln in list(g["files"].items())[:3]) + (f"<br>ほか {len(g['files']) - 3} ファイル" if len(g["files"]) > 3 else "")
+            md.append(f"| {g['source']} | `{g['host']}` | {g['count']}（{len(g['files'])}） | {where_} |")
+        if len(hgaps) > 80:
+            md.append(f"| … | ほか {len(hgaps) - 80} 個 | | |")
+        md.append("")
+    if hnotes:
+        md += ["コメント・文書・ロックファイル・名前空間の識別子の中だけに現れるもの（参照のリンクであることが多い。名前だけを挙げる。"
+               "依存の取得元・バッジの外部サービス・関連リポジトリなど、接続先や連携先の手がかりになるものがあれば載せる）:", "",
+               "、".join(f"`{g['host']}`" for g in hnotes[:150]) + (f" ほか {len(hnotes) - 150} 個" if len(hnotes) > 150 else ""), ""]
+
     # ---- 6. 証跡と形式
     problems, fixable = verify_evidence(all_rows, inventory["base_dir"])
     summary["evidence_problems"] = len(problems)
@@ -898,7 +1002,24 @@ def main() -> int:
                 md.append("")
         n1_entry = sum(1 for r in idx1.items if layer_of(r) == "入口")
         ratio = len(new_entry) / max(1, n1_entry)
-        md += [f"収束の目安: 根拠の場所も新しい入口の新規は、パス 1 の入口 {n1_entry} 件に対して {ratio:.0%}（書き方違いの見込みのものは数えていない）。5% を下回れば収束、特定のソース・種別に 5 件以上固まっていればその範囲をもう一度掘る。",
+        clusters = Counter((r.get("source", ""), str(r.get("kind", ""))) for r, _ in new_entry)
+        big = [f"{s} の {k}（{n} 件）" for (s, k), n in clusters.most_common() if n >= 5]
+        summary["new_entry_ratio"] = round(ratio, 3)
+        if ratio >= 0.05 or big:
+            why = []
+            if ratio >= 0.05:
+                why.append(f"割合が {ratio:.0%}（5% 以上）")
+            if big:
+                why.append("5 件以上の固まり: " + "、".join(big))
+            verdict = ("**判定: まだ掘り切れていない**（" + " / ".join(why) + "）。固まりがあればその範囲を、固まりが無ければ新規が出た種別をまとめて、"
+                       "切り口を変えた追加パスを 1 回行う（合計 3 パスまで）。")
+            summary["converged"] = False
+        else:
+            verdict = f"**判定: 収束**（割合が {ratio:.0%} で 5% 未満、5 件以上の固まりも無い）。"
+            summary["converged"] = True
+        md += [f"収束の目安: 根拠の場所も新しい入口の新規は、パス 1 の入口 {n1_entry} 件に対して {ratio:.0%}（書き方違いの見込みのものは数えていない）。"
+               "5% 以上か、特定のソース・種別に 5 件以上固まっていれば、どちらか一方でも、まだ掘り切れていない。", "",
+               verdict, "",
                "受け口・解釈点と暗黙の仕組みはパス 2 の専用レンズが主に拾うので、初回はここに多く出るのが普通（収束の判断には使わない）。", ""]
 
     # ---- 9. 3 層のつながり
