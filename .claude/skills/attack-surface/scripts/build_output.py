@@ -171,10 +171,12 @@ def request_template(it: dict) -> str:
     by = lambda where: [p for p in ps if p.get("in") == where]  # noqa: E731
     method = str(it.get("method", "") or "GET").upper()
     method = "GET" if method in ("ANY", "") else method
-    url = (f"https://{it['host']}" if it.get("host") else "{{base}}") + str(it.get("path", ""))
-    q = [p for p in by("query") if p["name"] != "*"]
+    path = str(it.get("path", "")).split("#", 1)[0]  # `#` 以降は識別のための表記で、送信しない
+    url = (f"https://{it['host']}" if it.get("host") else "{{base}}") + path
+    fixed = {kv.split("=", 1)[0].lower() for kv in path.partition("?")[2].split("&") if kv}  # パスに書かれた固定値のクエリ
+    q = [p for p in by("query") if p["name"] != "*" and str(p["name"]).lower() not in fixed]
     if q:
-        url += "?" + "&".join(f"{p['name']}={{{{{p['name']}}}}}" for p in q)
+        url += ("&" if "?" in path else "?") + "&".join(f"{p['name']}={{{{{p['name']}}}}}" for p in q)
     lines = [f"# {p.get('in', '')}: {squash(p['name'])[:120]}" for p in described] + [f"{method} {url}"]
     lines += [f"{p['name']}: {{{{{p['name']}}}}}" for p in by("header")]
     if by("cookie"):
@@ -252,7 +254,7 @@ def main() -> int:
         if p1:
             return "パス1とパス2以降の両方" if later else "パス1のみ"
         if not later:
-            return "その他"
+            return "以前の実行からの持ち込み" if "carryover:" in fb else "その他"
         # パス 1 は暗黙の仕組みを挙げない決まりなので、取りこぼしと呼べるのは定義のあるものだけ
         return "パス2以降のみ（暗黙の仕組み。パス1の対象外）" if str(it.get("origin", "")).lower() == "implicit" else "パス2以降のみ（定義あり。パス1の取りこぼし）"
 
@@ -365,7 +367,8 @@ def main() -> int:
             out.append(f"{hit} ({c})" if hit else f"未対応 ({c})")
         return out
 
-    pages = [it for it in items if it["kind"] == "page"]
+    # 画面と、画面を兼ねる URL の入口（同じ URL が HTML と JSON の両方を返すものは http と書き、calls を持つ）
+    pages = [it for it in items if it["kind"] == "page" or (is_url_item(it) and as_list(it.get("calls")))]
     if pages:
         md += ["# サイトマップ（画面と、呼び出す API）", "",
                "画面のコードから辿れた呼び出しを、一覧の ID に結んだもの。「未対応」は、呼び出し先が一覧に見つからなかったもの（受ける側が入力に無い、または書き方の違い）。", "",

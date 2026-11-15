@@ -168,8 +168,28 @@ def clean_host(text) -> tuple[str, list[str], str]:
     return host, others, (raw if leftover else "")
 
 
+_ROUTE_VALUE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+def route_query(path: str) -> str:
+    """パスに書かれたクエリのうち、値が固定のもの（`?page=settings`、`?action=upload`）だけを `k=v` で並べ替えて返す。
+
+    クエリの値で画面や処理が決まるアプリ（WordPress の `admin.php?page=`・`admin-ajax.php?action=`、`index.php?controller=` など）では、
+    固定値のクエリが入口の識別子の一部になる。値が変数（`{id}`、`:id`、`<id>`、空、`*`）のクエリは書き方の揺れとして捨てる。
+    """
+    q = str(path or "").split("#", 1)[0].partition("?")[2]
+    pairs = []
+    for part in q.split("&"):
+        k, eq, v = part.partition("=")
+        k, v = k.strip(), v.strip()
+        if k and eq and _ROUTE_VALUE.match(v) and _ROUTE_VALUE.match(k):
+            pairs.append(f"{k.lower()}={v.lower()}")
+    return "&".join(sorted(set(pairs)))
+
+
 def norm_path(path: str) -> str:
     p = split_host(path)[1]
+    rq = route_query(p)
     p = p.split("?", 1)[0]
     p = re.sub(r"\{[^{}]*\*\}", "{*}", p)
     p = re.sub(r"\{[^{}*]*\}", "{}", p)
@@ -178,7 +198,7 @@ def norm_path(path: str) -> str:
     p = re.sub(r"/{2,}", "/", p)
     if len(p) > 1:
         p = p.rstrip("/")
-    return p.lower()
+    return p.lower() + (f"?{rq}" if rq else "")
 
 
 def curly_path(path: str) -> str:
@@ -220,16 +240,21 @@ def anchor(f: dict) -> tuple | None:
     return (str(f.get("source", "")).strip().lower(), kind, file, line, quote)
 
 
+SAME_QUOTE_WINDOW = 3  # 引用が同じでも、これより離れた行は別の箇所（check.py が根拠を照合する幅と同じ）
+
+
 def same_spot(line_a: int, quote_a: str, line_b: int, quote_b: str) -> bool:
     """同じファイル内の 2 つの根拠が同じ箇所を指しているか。
 
-    行が同じ、または引用が同じなら同じ箇所。隣り合う別の行（app.use(a) と app.use(b)）は別の箇所として扱う。
+    行が同じ、または近い行で引用が同じなら同じ箇所。隣り合う別の行（app.use(a) と app.use(b)）は別の箇所として扱う。
+    同じ文の行が離れた場所に何度も出てくるファイル（設定見本の `apikey = "…"`、`return response.json();`）では、
+    引用が同じでも行が離れていれば別の箇所。行番号が書かれていない根拠は、引用だけで比べる。
     """
     if line_a and line_a == line_b:
         return True
     if quote_a and quote_b:
         if quote_a == quote_b:
-            return True
+            return not line_a or not line_b or abs(line_a - line_b) <= SAME_QUOTE_WINDOW
         if abs(line_a - line_b) <= 2 and min(len(quote_a), len(quote_b)) >= 12 and (quote_a in quote_b or quote_b in quote_a):
             return True
     return False
@@ -274,6 +299,23 @@ def same_mechanism(a: dict, b: dict, file: str) -> bool:
     if not ca or not cb:
         return True
     return bool(ident_tokens(a.get("path", "")) & ident_tokens(b.get("path", "")))
+
+
+_ROLE_PREFIX = re.compile(r"^\s*(outbound|inbound|secret)\s*:", re.I)
+
+
+def role_of(f: dict) -> str:
+    """識別子の接頭辞のうち、向きや性質を表すもの（outbound: / inbound: / secret:）。無ければ空。
+
+    送信と、その応答の取り込み。資格情報の所在と、それを使う処理。どちらも同じ行を根拠にすることがあるが、別の対象。
+    """
+    m = _ROLE_PREFIX.match(str(f.get("path", "") or ""))
+    return m.group(1).lower() if m else ""
+
+
+def _ident_words(f: dict) -> set[str]:
+    """根拠の位置が同じ項目どうしを「同じ対象」とみなすための語。向きや性質の接頭辞そのもの（secret など）は数えない。"""
+    return ident_tokens(_ROLE_PREFIX.sub("", str(f.get("path", "") or ""), count=1)) | ident_tokens(f.get("handler", ""))
 
 
 def finding_key(f: dict) -> tuple:
@@ -346,16 +388,18 @@ class Index:
                 return it
         if is_url_item(f) or KIND_GROUP.get(kind_of(f), kind_of(f)) in ("host", "port", "graphql"):
             return None
-        # 識別子の書き方が揺れる種別: 根拠が同じ箇所を指し、識別子に共通の語があれば同じ対象とみなす
+        # 識別子の書き方が揺れる種別: 根拠が同じ箇所を指し、識別子に共通の語があれば同じ対象とみなす。
+        # ただし、向きや性質の接頭辞（outbound: / inbound: / secret:）が食い違うものは別の対象として残す
+        # （外部への送信とその応答、資格情報の所在とそれを使うワークフローは、同じ行を根拠にしても別物）
         file, line, quote = first_evidence(f)
         if not file:
             return None
-        mine = ident_tokens(f.get("path", "")) | ident_tokens(f.get("handler", ""))
+        mine, role = _ident_words(f), role_of(f)
         for it in self.by_file.get((str(f.get("source", "")).strip().lower(), "入口", file), []):
-            if is_url_item(it) or anchor(it) is not None or not methods_compatible(f, it):
+            if is_url_item(it) or anchor(it) is not None or not methods_compatible(f, it) or role_of(it) != role:
                 continue
             _f2, line2, quote2 = first_evidence(it)
-            if same_spot(line, quote, line2, quote2) and (mine & (ident_tokens(it.get("path", "")) | ident_tokens(it.get("handler", "")))):
+            if same_spot(line, quote, line2, quote2) and (mine & _ident_words(it)):
                 return it
         return None
 

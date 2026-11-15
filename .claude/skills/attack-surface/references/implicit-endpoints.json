@@ -245,7 +245,7 @@
    {"m": "GET", "p": "/resume_historical_location", "c": "low"},
    {"m": "GET", "p": "/refresh_historical_location", "c": "low"}
   ]},
-  {"id": "wordpress", "name": "WordPress", "section": "PHP", "when": {"files": ["(^|/)wp-config(-sample)?\\.php$", "(^|/)wp-content/(plugins|themes)/", "(^|/)wp-includes/"], "composer": ["johnpbloch/wordpress", "roots/wordpress"]}, "endpoints": [
+  {"id": "wordpress", "name": "WordPress", "section": "PHP", "when": {"files": ["(^|/)wp-config(-sample)?\\.php$", "(^|/)wp-content/(plugins|themes)/", "(^|/)wp-includes/"], "composer": ["johnpbloch/wordpress", "roots/wordpress"], "code": [{"glob": "*.php", "regex": "(?m)^[ \\t/*#]*(Plugin|Theme) Name\\s*:"}, {"glob": "style.css", "regex": "(?m)^[ \\t/*]*Theme Name\\s*:"}, {"glob": "*.php", "regex": "add_action\\(\\s*['\"]wp_ajax_"}]}, "endpoints": [
    {"m": "GET,POST", "p": "/wp-login.php", "tags": ["auth-flow"], "c": "high"},
    {"m": "GET", "p": "/wp-admin/", "tags": ["admin"], "c": "high"},
    {"m": "GET,POST", "p": "/wp-admin/admin-ajax.php", "c": "high", "note": "wp_ajax_* / wp_ajax_nopriv_* フックの入口（?action=）"},
@@ -595,6 +595,17 @@
    {"m": "GET", "p": "/json/list", "tags": ["debug"], "port": 9229, "c": "low", "note": "デバッグ対象の一覧。--inspect 付きで起動し、ポートが外に出ていれば無認証で届く"},
    {"m": "GET", "p": "/json/version", "tags": ["debug"], "port": 9229, "c": "low"},
    {"m": "GET", "p": "/{target-id}", "proto": "ws", "tags": ["debug"], "port": 9229, "c": "low", "note": "デバッガの WebSocket。接続できれば任意コード実行"}
+  ]},
+  {"id": "php-docroot-scripts", "name": "PHP: 公開ディレクトリ内のスクリプトの直接実行", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": ".htaccess", "regex": "(?i)^\\s*(Require\\s+all\\s+denied|Deny\\s+from\\s+all)"}], "files": ["(^|/)index\\.php$"]}, "endpoints": [
+   {"m": "ANY", "p": "/{dir}/{file}.php", "tags": ["file-access"], "c": "medium", "note": "PHP は、公開ディレクトリにある .php を、URL で指定されればどれでも単独で実行する（起動用スクリプトやルーターを通らない）。起動用スクリプトと同じ階層にライブラリ・テンプレート・テスト・ツール・依存物のディレクトリがあれば、ディレクトリごとに 1 件載せる。.htaccess による遮断は Apache で .htaccess が有効なときだけ効く（nginx や PHP 内蔵サーバーは読まない）。公開用のディレクトリが分かれている（public/ だけを公開する）構成なら、その中の .php だけが対象"},
+   {"m": "GET", "p": "/index.php/{path*}", "c": "medium", "note": "起動用スクリプトの後ろに追加のパスを付けた形（PATH_INFO）でも、同じスクリプトが動く構成が多い。アプリがリクエストのパスを文字列として見ていれば、その判定や応答に入る"},
+   {"m": "GET", "p": "/{データの保存先}/{path*}", "tags": ["file-access"], "c": "low", "note": "保存先の既定値が公開ディレクトリの中にある場合（データ、SQLite のファイル、ログ、キャッシュ）。遮断のファイルを実行時に作る処理があるかを、保存先の種類ごとに確かめる"}
+  ]},
+  {"id": "php-builtin-server", "name": "PHP 内蔵サーバー (php -S)", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "*.json|*.sh|makefile|procfile|dockerfile*|*.yml|*.yaml|*.md", "regex": "php\\s+-S\\s+\\S+"}]}, "endpoints": [
+   {"m": "ANY", "p": "/{path*}", "tags": ["debug", "dev-only"], "c": "medium", "note": "php -S は .htaccess を読まず、起動したディレクトリの全ファイルを返す（.php は実行する）。ルータースクリプトを渡していなければ、存在しないパスは index.php に回る。待ち受けアドレス（0.0.0.0 か localhost か）と、開発用の起動が検証・本番で使われていないかを確認"}
+  ]},
+  {"id": "xdebug", "name": "Xdebug（PHP のステップ実行デバッガ）", "section": "追補: 組み込み方で場所が決まるもの", "when": {"code": [{"glob": "*.json|*.ini|*.yml|*.yaml|dockerfile*|*.sh|*.xml|makefile", "regex": "(?i)xdebug"}]}, "endpoints": [
+   {"m": "ANY", "p": "/{path*}?XDEBUG_SESSION_START={name}", "tags": ["debug", "dev-only"], "c": "low", "note": "Xdebug が有効な環境では、クエリ・Cookie（XDEBUG_SESSION）・ヘッダの合図でデバッガの接続が始まる（PHP 側から IDE の待ち受けへ接続する。既定のポートは 9003）。xdebug.mode、start_with_request、client_host、discover_client_host の設定を確認。開発用のイメージや設定が検証・本番で使われていないか"}
   ]},
   {"id": "express-defaults", "name": "Express の既定の動作", "section": "追補: 組み込み方で場所が決まるもの", "when": {"npm": ["express"]}, "endpoints": [
    {"m": "ANY", "p": "/{path*}", "tags": ["debug"], "c": "high", "note": "どのルートにも当たらないパスと、ハンドラが投げた例外は、既定のハンドラ（finalhandler）が応答する。NODE_ENV が production でないとスタックトレースを本文に返す。独自のエラーハンドラの有無と NODE_ENV の設定を確認"},

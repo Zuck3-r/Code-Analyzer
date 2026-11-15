@@ -7,7 +7,7 @@ references/briefs.md のひな形に、ユニット ID・RUN・観点（referenc
 
 使い方:
   python make_briefs.py RUN                       # パス 1（全ユニット）とパス 2（規模に応じた組み分け）
-  python make_briefs.py RUN --groups "entry+authz,implicit+leftover,intake,parsers"   # パス 2 の組み分けを指定
+  python make_briefs.py RUN --groups "entry+authz+client,implicit+leftover+infra+nonhttp,parsers,intake+assumptions+open"   # パス 2 の組み分けを指定
   python make_briefs.py RUN --pass1-self          # パス 1 を取りまとめ役が自分で読む場合（パス 1 の依頼文を作らない）
 
 背景（全体像）は依頼文に貼らず、RUN/work/orientation.md を読ませる。先に orientation.md を書いておくこと。
@@ -26,7 +26,9 @@ from _common import load_run, utf8_stdout  # noqa: E402
 
 REF = Path(__file__).parent.parent / "references"
 SMALL = ["entry+implicit+client+infra+nonhttp+leftover+authz", "intake+parsers", "assumptions+open"]
-MEDIUM = ["entry+authz", "implicit+leftover", "client+infra+nonhttp", "intake", "parsers", "assumptions+open"]
+# 中規模は 4 組。PrivateBin の 3 回の実走で、parsers 以外の組は項目の 7〜9 割以上がパス 1 と重なり、
+# 組ごとに同じ資料を読む量（1 人 6〜7 万字）が無視できなかったため、6 組から減らした。成果が最も多い parsers は単独のまま
+MEDIUM = ["entry+authz+client", "implicit+leftover+infra+nonhttp", "parsers", "intake+assumptions+open"]
 LARGE = ["entry", "implicit", "client", "infra", "nonhttp", "leftover", "authz", "intake", "parsers", "assumptions", "open"]
 # 役割ごとのモデル（SKILL.md の「役割ごとのモデル」と同じ内容）。
 #   推論の比重が大きい観点（認証の境界、受け口、解釈点、前提を破る、自由枠）は最上位のモデル。
@@ -127,7 +129,7 @@ def main() -> int:
         if unknown:
             sys.exit(f"ERROR: 知らない観点: {', '.join(unknown)}（使えるもの: {' '.join(sections)}）")
         used += lenses
-        name = lenses[0] if len(lenses) == 1 else "-".join(lenses) if len(lenses) <= 3 else f"{lenses[0]}-group"
+        name = lenses[0] if len(lenses) == 1 else "-".join(lenses) if len(lenses) <= 4 else f"{lenses[0]}-group"
         parts = [OPEN_TEXT if x == "open" and len(lenses) == 1 else
                  (sections[x] if x != "open" else "`open` — 自由枠\n\n上の観点とは別に、次も行ってください。\n" + OPEN_TEXT) for x in lenses]
         body = "\n\n".join(parts)
